@@ -1,0 +1,15 @@
+model_provider:
+  type: chat.completions
+  model: ${UTU_LLM_MODEL}
+  api_format: openai
+
+model_settings:
+  include_usage: true
+
+rate_limit:
+  rpm: 500
+  tpm: 800000
+  max_retries: 20
+  retry_min_wait: 1.0
+  retry_max_wait: 120.0
+  retry_jitter: 2.0

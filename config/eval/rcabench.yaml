@@ -1,0 +1,21 @@
+exp_id: "thinkdepthai_rcabench"
+agent_type: "langgraph_rca"
+model_name: ""  # Auto-populated from config
+
+data:
+  dataset: "RCABench"
+  type: single
+  question_field: question
+  gt_field: answer
+
+concurrency: 10
+judge_concurrency: 5
+
+judge_model:
+  model_provider:
+    type: chat.completions
+    model: gpt-4o-mini
+  rate_limit:
+    rpm: 500
+    tpm: 800000
+    max_retries: 20

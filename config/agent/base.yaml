@@ -1,0 +1,13 @@
+type: langgraph_rca
+
+agent:
+  name: RCA-Agent
+  prompt_path: agents/langgraph/rca.yaml
+  prompt_key: RCA_ANALYSIS_SP
+
+toolkits:
+  query_parquet_files:
+    name: query_parquet_files
+    mode: builtin
+
+max_turns: 1000
