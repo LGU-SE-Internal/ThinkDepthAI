@@ -43,12 +43,9 @@ class ThinkDepthAgent(BaseAgent):
         return "thinkdepthai"
 
     def version(self) -> str | None:
-        try:
-            from importlib.metadata import version
+        from importlib.metadata import version
 
-            return version("thinkdepthai")
-        except Exception:
-            return None
+        return version("thinkdepthai")
 
     async def run(
         self,
@@ -66,20 +63,17 @@ class ThinkDepthAgent(BaseAgent):
 
         run_id = str(uuid.uuid4())
 
-        # Emit "running" immediately so the dashboard shows real-time status
         if ctx:
             ctx.emit({"type": "running", "run_id": run_id})
 
-        # Build trajectory dir: {base}/{exp_id}/
+        agent_config = load_agent_config(self._config_path)
+
+        # Build trajectory dir: {base}/{exp_id}/{case_name}.jsonl
         traj_dir = self._trajectory_dir
         if self._exp_id:
             traj_dir = os.path.join(traj_dir, self._exp_id)
 
-        # Derive a human-readable filename from data_dir.
-        # data_dir is like ".../sock-shop_case42/converted" → "sock-shop_case42"
         traj_filename = self._case_name_from_data_dir(data_dir)
-
-        agent_config = load_agent_config(self._config_path)
         agent = LanggraphRCAAgent(
             config=agent_config,
             trajectory_dir=traj_dir,
@@ -109,18 +103,10 @@ class ThinkDepthAgent(BaseAgent):
 
     @staticmethod
     def _case_name_from_data_dir(data_dir: str) -> str:
-        """Extract a meaningful case name from the data directory path.
 
-        Examples:
-            ``/mnt/jfs/rcabench_dataset/sock-shop_case42/converted``
-              → ``sock-shop_case42``
-            ``/data/train-ticket_fault3``
-              → ``train-ticket_fault3``
-        """
         from pathlib import Path
 
         parts = Path(data_dir).parts
-        # Walk backwards, skip generic segments like "converted"
         for part in reversed(parts):
             if part not in ("converted", "data", ".", "/"):
                 return part

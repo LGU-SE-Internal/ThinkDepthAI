@@ -18,13 +18,8 @@ dependencies = [
     "pytz>=2026.1.post1",
     "pyyaml>=6.0.2",
     "rcabench-platform[llm-eval]>=0.1.0",
-    "rich>=13.7.1",
     "tenacity>=8.2.0",
-    "typer>=0.21.1",
 ]
-
-[project.scripts]
-thinkdepthai = "thinkdepthai.cli.main:app"
 
 [project.entry-points."llm_eval.agents"]
 thinkdepthai = "thinkdepthai.agents.eval_agent:ThinkDepthAgent"
