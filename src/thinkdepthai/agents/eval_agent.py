@@ -54,10 +54,18 @@ class ThinkDepthAgent(BaseAgent):
         data_dir: str,
         **kwargs: Any,
     ) -> AgentResult:
+        import uuid
+
         from ..agent import LanggraphRCAAgent
         from ..config import load_agent_config
 
         ctx: RunContext | None = kwargs.get("ctx")
+
+        run_id = str(uuid.uuid4())
+
+        # Emit "running" immediately so the dashboard shows real-time status
+        if ctx:
+            ctx.emit({"type": "running", "run_id": run_id})
 
         agent_config = load_agent_config(self._config_path)
         agent = LanggraphRCAAgent(
@@ -66,22 +74,22 @@ class ThinkDepthAgent(BaseAgent):
         )
 
         async with agent:
-            result = await agent.run(incident, trace_id=None)
+            result = await agent.run(
+                incident,
+                data_dir=data_dir,
+                trace_id=run_id,
+            )
 
-        run_id = result.trace_id
-
-        # Emit events for the framework
-        if ctx:
-            ctx.emit({"type": "running", "run_id": run_id})
-            traj_file = result.metadata.get("trajectory_file")
-            if traj_file:
-                ctx.emit({"type": "trajectory_update", "path": traj_file})
+        # Emit trajectory path so the dashboard can stream events
+        traj_file = result.metadata.get("trajectory_file")
+        if ctx and traj_file:
+            ctx.emit({"type": "trajectory_update", "path": traj_file})
 
         return AgentResult(
             response=result.final_output or "",
             trajectory=result.trajectory if isinstance(result.trajectory, Trajectory) else None,
             metadata={
                 "run_id": run_id,
-                "trajectory_file": result.metadata.get("trajectory_file"),
+                "trajectory_file": traj_file,
             },
         )

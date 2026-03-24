@@ -45,7 +45,9 @@ class LanggraphRCAAgent:
     Standalone implementation — no BaseAgent inheritance.
     """
 
-    def __init__(self, *, config: AgentConfig | str | None = None, name: str | None = None, trajectory_dir: str | None = None):
+    def __init__(
+        self, *, config: AgentConfig | str | None = None, name: str | None = None, trajectory_dir: str | None = None
+    ):
         if isinstance(config, AgentConfig):
             self.config = config
         elif isinstance(config, str):
@@ -122,33 +124,47 @@ class LanggraphRCAAgent:
                 await toolkit.cleanup()
         self._toolkits.clear()
 
-    async def run(self, input: str | list, trace_id: str | None = None) -> AgentResult:
+    async def run(
+        self,
+        input: str,
+        trace_id: str | None = None,
+        data_dir: str | None = None,
+    ) -> AgentResult:
         """Run RCA analysis on an incident.
 
         Uses astream(stream_mode="updates") for real-time JSONL logging of each
         graph node execution, while accumulating the final state for the result.
+
+        Args:
+            input: Incident description text or list of descriptions.
+            trace_id: Optional trace ID for this run.
+            data_dir: Path to the directory containing parquet data files.
+                      Appended to the incident description so the LLM knows
+                      where to find the telemetry data.
         """
         if not self._initialized:
             await self.build()
 
-        if isinstance(input, list):
-            incident_description = json.dumps(input, ensure_ascii=False, indent=2)
-        else:
-            incident_description = input
+        incident_description = input
 
         trace_id = trace_id or str(uuid.uuid4())
+
+        print(incident_description)
         logger.info(f"> trace_id: {trace_id}")
 
         # Setup trajectory logger if enabled
         traj_logger: TrajectoryLogger | None = None
         if self._trajectory_dir:
             traj_logger = TrajectoryLogger(output_dir=self._trajectory_dir, run_id=trace_id)
-            traj_logger.log("run_start", {
-                "trace_id": trace_id,
-                "model": self.config.model.model_provider.model,
-                "prompt_path": self.config.agent.prompt_path,
-                "incident_description": incident_description[:500],
-            })
+            traj_logger.log(
+                "run_start",
+                {
+                    "trace_id": trace_id,
+                    "model": self.config.model.model_provider.model,
+                    "prompt_path": self.config.agent.prompt_path,
+                    "incident_description": incident_description[:500],
+                },
+            )
 
         initial_state = {
             "messages": [],
@@ -165,9 +181,7 @@ class LanggraphRCAAgent:
             run_config = {"recursion_limit": 3000, "metadata": {"trace_id": trace_id}}
             assert self._rca_agent is not None, "RCA agent not built"
 
-            async for event in self._rca_agent.astream(
-                initial_state, config=run_config, stream_mode="updates"
-            ):
+            async for event in self._rca_agent.astream(initial_state, config=run_config, stream_mode="updates"):
                 # event: {node_name: node_output_dict}
                 for node_name, node_output in event.items():
                     if traj_logger:
@@ -222,8 +236,7 @@ class LanggraphRCAAgent:
                     data: dict[str, Any] = {"content": msg.content[:2000] if isinstance(msg.content, str) else ""}
                     if msg.tool_calls:
                         data["tool_calls"] = [
-                            {"name": tc.get("name", ""), "args": tc.get("args", {})}
-                            for tc in msg.tool_calls
+                            {"name": tc.get("name", ""), "args": tc.get("args", {})} for tc in msg.tool_calls
                         ]
                     if hasattr(msg, "usage_metadata") and msg.usage_metadata:
                         data["usage"] = dict(msg.usage_metadata)
@@ -232,10 +245,13 @@ class LanggraphRCAAgent:
         elif node_name == "tool_node":
             for msg in messages:
                 if isinstance(msg, ToolMessage):
-                    traj_logger.log("tool_result", {
-                        "tool_call_id": msg.tool_call_id,
-                        "content": str(msg.content)[:3000],
-                    })
+                    traj_logger.log(
+                        "tool_result",
+                        {
+                            "tool_call_id": msg.tool_call_id,
+                            "content": str(msg.content)[:3000],
+                        },
+                    )
 
         elif node_name == "compress_rca_findings":
             findings = node_output.get("rca_findings", "")
@@ -300,7 +316,13 @@ class LanggraphRCAAgent:
         if not causal_graph_output or not causal_graph_output.strip():
             logger.warning("CausalGraph output is empty")
             return json.dumps(
-                {"nodes": [], "edges": [], "root_causes": [], "component_to_service": {}, "parse_error": "Empty output"},
+                {
+                    "nodes": [],
+                    "edges": [],
+                    "root_causes": [],
+                    "component_to_service": {},
+                    "parse_error": "Empty output",
+                },
                 ensure_ascii=False,
             )
 
@@ -310,7 +332,10 @@ class LanggraphRCAAgent:
             logger.warning("Could not extract JSON from CausalGraph output")
             return json.dumps(
                 {
-                    "nodes": [], "edges": [], "root_causes": [], "component_to_service": {},
+                    "nodes": [],
+                    "edges": [],
+                    "root_causes": [],
+                    "component_to_service": {},
                     "parse_error": "Could not find JSON in output",
                     "raw_output": causal_graph_output[:500],
                 },
@@ -344,7 +369,10 @@ class LanggraphRCAAgent:
             logger.error(f"Failed to parse CausalGraph JSON: {e}")
             return json.dumps(
                 {
-                    "nodes": [], "edges": [], "root_causes": [], "component_to_service": {},
+                    "nodes": [],
+                    "edges": [],
+                    "root_causes": [],
+                    "component_to_service": {},
                     "parse_error": f"JSON decode error: {e}",
                     "raw_output": causal_graph_output[:500],
                 },
@@ -354,7 +382,10 @@ class LanggraphRCAAgent:
             logger.error(f"Unexpected error validating CausalGraph: {e}")
             return json.dumps(
                 {
-                    "nodes": [], "edges": [], "root_causes": [], "component_to_service": {},
+                    "nodes": [],
+                    "edges": [],
+                    "root_causes": [],
+                    "component_to_service": {},
                     "validation_error": str(e),
                     "raw_output": causal_graph_output[:500],
                 },

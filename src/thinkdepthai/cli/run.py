@@ -24,7 +24,7 @@ async def run_investigation(
 
     agent = LanggraphRCAAgent(config=config, trajectory_dir=trajectory_dir)
     async with agent:
-        result = await agent.run(incident)
+        result = await agent.run(incident, data_dir=data_dir)
 
     console.print("\n[bold green]RCA Results:[/]")
     try:
