@@ -1,4 +1,4 @@
-exp_id: "thinkdepthai_test_run"
+exp_id: "thinkdepthai_openrca2_lite"
 agent_type: "langgraph_rca"
 model_name: ""
 
@@ -7,20 +7,21 @@ data:
   type: single
   question_field: question
   gt_field: answer
+  tags:
+    - openrca2-lite
 
 db_url: "sqlite:////home/nn/workspace/AgentM/eval.db"
 
-concurrency: 1
-max_samples: 1
-judge_concurrency: 1
+concurrency: 5
+judge_concurrency: 5
 
 judge_model:
   model_provider:
     type: chat.completions
-    model: Doubao-Seed-2.0-pro
+    model: ${UTU_LLM_MODEL}
     base_url: ${UTU_LLM_BASE_URL}
     api_key: ${UTU_LLM_API_KEY}
   rate_limit:
     rpm: 500
-    tpm: 800000
+    tpm: 320000
     max_retries: 20

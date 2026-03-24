@@ -1,16 +1,18 @@
-"""Batch evaluation using rcabench-platform v3 SDK."""
+"""CLI eval subcommand — thin wrapper around ``rca llm-eval run --agent thinkdepthai``.
+
+All heavy lifting is done by rcabench-platform's CLI.  This wrapper adds
+ThinkDepthAI-specific conveniences:
+
+* Auto-populates ``model_name`` from the agent config when not set.
+* Defaults ``--config_path`` to the project's default agent config.
+"""
 
 from __future__ import annotations
 
+import asyncio
 import os
 
-from rcabench_platform.v3.sdk.llm_eval.config import ConfigLoader, EvalConfig
-from rcabench_platform.v3.sdk.llm_eval.eval.benchmarks.base_benchmark import BaseBenchmark, RolloutResult
-from rcabench_platform.v3.sdk.llm_eval.eval.data import EvaluationSample
 from rich.console import Console
-
-from ..agent import LanggraphRCAAgent
-from ..config import load_agent_config
 
 console = Console()
 
@@ -21,26 +23,45 @@ async def run_eval(
     exp_id_override: str | None = None,
     judge_only: bool = False,
     stat_only: bool = False,
+    trajectory_dir: str | None = "./trajectories",
+    source_path: str | None = None,
+    dashboard: bool = False,
+    dashboard_port: int = 8765,
+    dashboard_host: str = "0.0.0.0",
 ) -> None:
-    """Run the full evaluation pipeline: preprocess → rollout → judge → stat."""
+    """Run the full evaluation pipeline: preprocess -> rollout -> judge -> stat."""
+    from rcabench_platform.v3.sdk.llm_eval.config import EvalConfig
+    from rcabench_platform.v3.sdk.llm_eval.eval import BaseBenchmark
 
-    eval_config: EvalConfig = ConfigLoader.load_eval_config(eval_config_path)
+    from ..config import load_agent_config, load_yaml_config
+
+    # Load with env var resolution (SDK's loader doesn't resolve ${VAR})
+    raw_config = load_yaml_config(eval_config_path)
+    eval_config: EvalConfig = EvalConfig(**raw_config)
 
     if exp_id_override:
         eval_config.exp_id = exp_id_override
 
-    # Load agent config
+    # Load agent config for model_name auto-population
     agent_config = load_agent_config(agent_config_path)
 
-    # Auto-populate model_name
     if not getattr(eval_config, "model_name", None):
         eval_config.model_name = agent_config.model.model_provider.model
 
     if eval_config.db_url:
         os.environ["LLM_EVAL_DB_URL"] = eval_config.db_url
 
-    benchmark = BaseBenchmark(eval_config)
+    # Resolve source_path: CLI flag → config field → env → default
+    resolved_source_path = (
+        source_path or eval_config.source_path or os.environ.get("RCABENCH_SOURCE_PATH", "/mnt/jfs/rcabench_dataset")
+    )
 
+    def _resolve_source(source: str) -> str:
+        return os.path.join(resolved_source_path, source, "converted")
+
+    benchmark = BaseBenchmark(eval_config, source_path_fn=_resolve_source)
+
+    # -- Judge-only / stat-only shortcuts ------------------------------------
     if stat_only:
         console.print("[bold]Running stat only...[/]")
         await benchmark.stat()
@@ -52,46 +73,107 @@ async def run_eval(
         await benchmark.stat()
         return
 
+    # -- Full pipeline -------------------------------------------------------
     console.print(
-        f"[bold]Eval:[/] exp_id=[cyan]{eval_config.exp_id}[/]  "
-        f"concurrency=[cyan]{eval_config.concurrency}[/]"
+        f"[bold]Eval:[/] exp_id=[cyan]{eval_config.exp_id}[/]  concurrency=[cyan]{eval_config.concurrency}[/]"
     )
+
+    # EvalTracker + optional dashboard
+    from rcabench_platform.v3.sdk.llm_eval.eval.tracker import EvalTracker
+
+    tracker: EvalTracker | None = None
+    dashboard_server_task = None
+
+    if dashboard:
+        tracker = EvalTracker(trajectory_dir=trajectory_dir or "./trajectories")
+
+        try:
+            import uvicorn
+            from rcabench_platform.v3.sdk.llm_eval.eval.dashboard import Broadcaster, create_eval_dashboard
+
+            bc = Broadcaster()
+            app = create_eval_dashboard(eval_tracker=tracker, broadcaster=bc)
+
+            _loop = asyncio.get_running_loop()
+
+            def _tracker_to_ws(event: dict) -> None:
+                try:
+                    asyncio.run_coroutine_threadsafe(bc.broadcast(event), _loop)
+                except RuntimeError:
+                    pass
+
+            tracker.add_listener(_tracker_to_ws)
+
+            uvi_config = uvicorn.Config(app, host=dashboard_host, port=dashboard_port, log_level="warning")
+            server = uvicorn.Server(uvi_config)
+            dashboard_server_task = asyncio.create_task(server.serve())
+            await asyncio.sleep(0.3)
+            console.print(
+                f"Dashboard: [link=http://localhost:{dashboard_port}]http://localhost:{dashboard_port}[/link]"
+            )
+        except ImportError:
+            console.print("[yellow]Dashboard requires uvicorn and fastapi[/]")
 
     console.print("[bold]Phase 1:[/] preprocess")
     benchmark.preprocess()
 
     console.print("[bold]Phase 2:[/] rollout")
 
-    async def runner(sample: EvaluationSample) -> RolloutResult:
-        sample_id = str(sample.id)
-        incident = (sample.augmented_question or sample.raw_question or "").strip()
-        meta = sample.meta if isinstance(sample.meta, dict) else {}
-        data_dir: str = meta.get("path", "")
+    from ..agents.eval_agent import ThinkDepthAgent
 
-        if not data_dir or not incident:
-            console.print(f"  [yellow]SKIP[/] sample id={sample_id}")
-            return RolloutResult()
+    agent = ThinkDepthAgent(
+        config_path=agent_config_path,
+        trajectory_dir=trajectory_dir or "./trajectories",
+    )
 
-        console.print(f"  [blue]START[/] sample id={sample_id} idx={sample.dataset_index}")
+    # Bridge RunContext events → EvalTracker + console output
+    def on_event(sample_id: str, event: dict) -> None:
+        evt_type = event.get("type", "")
+        sample = event.get("sample")
 
-        try:
-            agent = LanggraphRCAAgent(config=agent_config)
-            async with agent:
-                result = await agent.run(incident)
+        if evt_type == "started":
+            data_dir = event.get("data_dir", "")
+            idx = sample.dataset_index if sample else "?"
+            console.print(f"  [blue]START[/] sample id={sample_id} idx={idx} data_dir={data_dir}")
+            if tracker and sample:
+                tracker.register_sample(sample_id, sample.dataset_index, data_dir)
 
-            status = "[green]OK[/]" if result.final_output else "[red]EMPTY[/]"
-            console.print(f"  {status} sample id={sample_id}")
+        elif evt_type == "running":
+            run_id = event.get("run_id", "")
+            if tracker:
+                tracker.mark_running(sample_id, run_id)
 
-            return RolloutResult(
-                response=result.final_output or "",
-                trajectory_json=result.trajectory.to_json(),
-                trace_id=result.trace_id,
-            )
-        except Exception as e:
-            console.print(f"  [red]FAIL[/] sample id={sample_id}: {e}")
-            return RolloutResult()
+        elif evt_type == "trajectory_update":
+            traj_path = event.get("path", "")
+            if tracker and traj_path:
+                tracker.update_trajectory_path(sample_id, traj_path)
 
-    ok_count, fail_count = await benchmark.rollout(runner, max_samples=eval_config.max_samples)
+        elif evt_type == "completed":
+            idx = sample.dataset_index if sample else "?"
+            console.print(f"  [green]OK[/] sample id={sample_id} idx={idx}")
+            if tracker:
+                tracker.mark_completed(sample_id)
+
+        elif evt_type == "failed":
+            idx = sample.dataset_index if sample else "?"
+            error = event.get("error", "empty response")
+            console.print(f"  [red]FAIL[/] sample id={sample_id} idx={idx}: {error}")
+            if tracker:
+                tracker.mark_failed(sample_id, error)
+
+        elif evt_type == "skipped":
+            idx = sample.dataset_index if sample else "?"
+            console.print(f"  [yellow]SKIP[/] sample id={sample_id} idx={idx}")
+            if tracker and sample:
+                meta = sample.meta if isinstance(sample.meta, dict) else {}
+                tracker.register_sample(sample_id, sample.dataset_index, meta.get("path", ""))
+                tracker.mark_skipped(sample_id, "missing incident or data_dir")
+
+    ok_count, fail_count = await benchmark.rollout(
+        agent,
+        max_samples=eval_config.max_samples,
+        on_event=on_event,
+    )
     console.print(f"  [green]{ok_count} ok[/] / [red]{fail_count} failed[/]")
 
     console.print("[bold]Phase 3:[/] judge")
@@ -99,3 +181,14 @@ async def run_eval(
 
     console.print("[bold]Phase 4:[/] stat")
     await benchmark.stat()
+
+    # Keep dashboard alive after eval completes
+    if dashboard_server_task is not None:
+        console.print(
+            f"\nDashboard running at [link=http://localhost:{dashboard_port}]"
+            f"http://localhost:{dashboard_port}[/link] -- press Ctrl+C to stop."
+        )
+        try:
+            await dashboard_server_task
+        except asyncio.CancelledError:
+            pass

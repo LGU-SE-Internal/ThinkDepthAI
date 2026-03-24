@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-import os
 from typing import Any
 
 from pydantic import BaseModel, Field
@@ -12,9 +11,9 @@ class ModelProviderConfig(BaseModel):
     """Model provider configuration."""
 
     type: str = "chat.completions"
-    model: str | None = os.getenv("UTU_LLM_MODEL")
-    base_url: str | None = os.getenv("UTU_LLM_BASE_URL")
-    api_key: str | None = os.getenv("UTU_LLM_API_KEY")
+    model: str | None = Field(default=None)
+    base_url: str | None = Field(default=None)
+    api_key: str | None = Field(default=None)
     api_format: str = "openai"  # openai | anthropic | google
 
     def __repr__(self) -> str:

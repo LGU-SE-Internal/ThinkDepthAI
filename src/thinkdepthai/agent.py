@@ -17,6 +17,7 @@ from .llm import create_langchain_model
 from .tools import think_tool
 from .tools_lib import AsyncBaseToolkit, toolkit_to_langchain_tools
 from .tools_lib.query_parquet_toolkit import QueryParquetFilesToolkit
+from .trajectory_logger import TrajectoryLogger
 from .utils.logger import get_logger
 
 logger = get_logger(__name__)
@@ -44,7 +45,7 @@ class LanggraphRCAAgent:
     Standalone implementation — no BaseAgent inheritance.
     """
 
-    def __init__(self, *, config: AgentConfig | str | None = None, name: str | None = None):
+    def __init__(self, *, config: AgentConfig | str | None = None, name: str | None = None, trajectory_dir: str | None = None):
         if isinstance(config, AgentConfig):
             self.config = config
         elif isinstance(config, str):
@@ -58,6 +59,7 @@ class LanggraphRCAAgent:
         self._rca_agent = None
         self._toolkits: dict[str, AsyncBaseToolkit] = {}
         self._initialized = False
+        self._trajectory_dir = trajectory_dir
 
     async def __aenter__(self) -> LanggraphRCAAgent:
         await self.build()
@@ -123,12 +125,8 @@ class LanggraphRCAAgent:
     async def run(self, input: str | list, trace_id: str | None = None) -> AgentResult:
         """Run RCA analysis on an incident.
 
-        Args:
-            input: Incident description (string or list)
-            trace_id: Optional trace ID for tracking
-
-        Returns:
-            AgentResult containing findings and trajectory
+        Uses astream(stream_mode="updates") for real-time JSONL logging of each
+        graph node execution, while accumulating the final state for the result.
         """
         if not self._initialized:
             await self.build()
@@ -141,6 +139,17 @@ class LanggraphRCAAgent:
         trace_id = trace_id or str(uuid.uuid4())
         logger.info(f"> trace_id: {trace_id}")
 
+        # Setup trajectory logger if enabled
+        traj_logger: TrajectoryLogger | None = None
+        if self._trajectory_dir:
+            traj_logger = TrajectoryLogger(output_dir=self._trajectory_dir, run_id=trace_id)
+            traj_logger.log("run_start", {
+                "trace_id": trace_id,
+                "model": self.config.model.model_provider.model,
+                "prompt_path": self.config.agent.prompt_path,
+                "incident_description": incident_description[:500],
+            })
+
         initial_state = {
             "messages": [],
             "incident_description": incident_description,
@@ -149,29 +158,88 @@ class LanggraphRCAAgent:
             "raw_notes": [],
         }
 
+        rca_findings = ""
+        all_messages: list = []
+
         try:
-            config = {"recursion_limit": 3000, "metadata": {"trace_id": trace_id}}
+            run_config = {"recursion_limit": 3000, "metadata": {"trace_id": trace_id}}
             assert self._rca_agent is not None, "RCA agent not built"
-            result = await self._rca_agent.ainvoke(initial_state, config=config)
+
+            async for event in self._rca_agent.astream(
+                initial_state, config=run_config, stream_mode="updates"
+            ):
+                # event: {node_name: node_output_dict}
+                for node_name, node_output in event.items():
+                    if traj_logger:
+                        self._log_node_event(traj_logger, node_name, node_output)
+
+                    # Accumulate messages from node outputs
+                    if "messages" in node_output:
+                        all_messages.extend(node_output["messages"])
+
+                    # Capture rca_findings from compress node
+                    if "rca_findings" in node_output:
+                        rca_findings = node_output["rca_findings"]
+
         except Exception as e:
             logger.error(f"Error running RCA agent: {e}")
+            if traj_logger:
+                traj_logger.log("error", {"error": str(e), "type": type(e).__name__})
+                traj_logger.close()
             raise
 
-        rca_findings = result.get("rca_findings", "")
         final_output = self._validate_causal_graph_json(rca_findings)
 
         # Build trajectory using SDK schema
-        messages = result.get("messages", [])
         agent_name = self.config.agent.name or "RCA-Agent"
-        agent_traj = TrajectoryConverter.from_langchain_messages(messages, agent_name=agent_name)
+        agent_traj = TrajectoryConverter.from_langchain_messages(all_messages, agent_name=agent_name)
         trajectory = Trajectory(agent_trajectories=[agent_traj])
+
+        traj_file: str | None = None
+        if traj_logger:
+            traj_logger.log_result(final_output, trace_id)
+            traj_file = str(traj_logger.file_path)
+            traj_logger.close()
 
         return AgentResult(
             task=incident_description,
             trace_id=trace_id,
             final_output=final_output,
             trajectory=trajectory,
+            metadata={"trajectory_file": traj_file},
         )
+
+    @staticmethod
+    def _log_node_event(traj_logger: TrajectoryLogger, node_name: str, node_output: dict) -> None:
+        """Log a single graph node execution event to JSONL."""
+        from langchain_core.messages import AIMessage, ToolMessage
+
+        messages = node_output.get("messages", [])
+
+        if node_name == "llm_call":
+            for msg in messages:
+                if isinstance(msg, AIMessage):
+                    data: dict[str, Any] = {"content": msg.content[:2000] if isinstance(msg.content, str) else ""}
+                    if msg.tool_calls:
+                        data["tool_calls"] = [
+                            {"name": tc.get("name", ""), "args": tc.get("args", {})}
+                            for tc in msg.tool_calls
+                        ]
+                    if hasattr(msg, "usage_metadata") and msg.usage_metadata:
+                        data["usage"] = dict(msg.usage_metadata)
+                    traj_logger.log("llm_response", data)
+
+        elif node_name == "tool_node":
+            for msg in messages:
+                if isinstance(msg, ToolMessage):
+                    traj_logger.log("tool_result", {
+                        "tool_call_id": msg.tool_call_id,
+                        "content": str(msg.content)[:3000],
+                    })
+
+        elif node_name == "compress_rca_findings":
+            findings = node_output.get("rca_findings", "")
+            traj_logger.log("compress_findings", {"rca_findings": findings[:5000]})
 
     @staticmethod
     def _extract_json_from_text(text: str) -> str | None:
