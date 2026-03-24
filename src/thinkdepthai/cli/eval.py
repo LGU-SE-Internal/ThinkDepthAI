@@ -85,7 +85,9 @@ async def run_eval(
     dashboard_server_task = None
 
     if dashboard:
-        tracker = EvalTracker(trajectory_dir=trajectory_dir or "./trajectories")
+        traj_base = trajectory_dir or "./trajectories"
+        tracker_traj_dir = os.path.join(traj_base, eval_config.exp_id) if eval_config.exp_id else traj_base
+        tracker = EvalTracker(trajectory_dir=tracker_traj_dir)
 
         try:
             import uvicorn
@@ -124,6 +126,7 @@ async def run_eval(
     agent = ThinkDepthAgent(
         config_path=agent_config_path,
         trajectory_dir=trajectory_dir or "./trajectories",
+        exp_id=eval_config.exp_id,
     )
 
     # Bridge RunContext events → EvalTracker + console output

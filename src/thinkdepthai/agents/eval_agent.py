@@ -31,10 +31,12 @@ class ThinkDepthAgent(BaseAgent):
         self,
         config_path: str | None = None,
         trajectory_dir: str = "./trajectories",
+        exp_id: str | None = None,
         **kwargs: Any,
     ) -> None:
         self._config_path = config_path
         self._trajectory_dir = trajectory_dir
+        self._exp_id = exp_id
 
     @staticmethod
     def name() -> str:
@@ -54,6 +56,7 @@ class ThinkDepthAgent(BaseAgent):
         data_dir: str,
         **kwargs: Any,
     ) -> AgentResult:
+        import os
         import uuid
 
         from ..agent import LanggraphRCAAgent
@@ -67,10 +70,19 @@ class ThinkDepthAgent(BaseAgent):
         if ctx:
             ctx.emit({"type": "running", "run_id": run_id})
 
+        # Build trajectory dir: {base}/{exp_id}/
+        traj_dir = self._trajectory_dir
+        if self._exp_id:
+            traj_dir = os.path.join(traj_dir, self._exp_id)
+
+        # Derive a human-readable filename from data_dir.
+        # data_dir is like ".../sock-shop_case42/converted" → "sock-shop_case42"
+        traj_filename = self._case_name_from_data_dir(data_dir)
+
         agent_config = load_agent_config(self._config_path)
         agent = LanggraphRCAAgent(
             config=agent_config,
-            trajectory_dir=self._trajectory_dir,
+            trajectory_dir=traj_dir,
         )
 
         async with agent:
@@ -78,6 +90,7 @@ class ThinkDepthAgent(BaseAgent):
                 incident,
                 data_dir=data_dir,
                 trace_id=run_id,
+                trajectory_filename=traj_filename,
             )
 
         # Emit trajectory path so the dashboard can stream events
@@ -93,3 +106,22 @@ class ThinkDepthAgent(BaseAgent):
                 "trajectory_file": traj_file,
             },
         )
+
+    @staticmethod
+    def _case_name_from_data_dir(data_dir: str) -> str:
+        """Extract a meaningful case name from the data directory path.
+
+        Examples:
+            ``/mnt/jfs/rcabench_dataset/sock-shop_case42/converted``
+              → ``sock-shop_case42``
+            ``/data/train-ticket_fault3``
+              → ``train-ticket_fault3``
+        """
+        from pathlib import Path
+
+        parts = Path(data_dir).parts
+        # Walk backwards, skip generic segments like "converted"
+        for part in reversed(parts):
+            if part not in ("converted", "data", ".", "/"):
+                return part
+        return "unknown"

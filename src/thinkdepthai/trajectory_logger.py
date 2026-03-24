@@ -23,28 +23,48 @@ class TrajectoryLogger:
       - step: sequential step number
     """
 
-    def __init__(self, output_dir: str | Path = "./trajectories", run_id: str | None = None):
+    def __init__(
+        self,
+        output_dir: str | Path = "./trajectories",
+        run_id: str | None = None,
+        filename: str | None = None,
+    ):
         self._output_dir = Path(output_dir)
         self._output_dir.mkdir(parents=True, exist_ok=True)
         self._run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
-        self._file_path = self._output_dir / f"{self._run_id}.jsonl"
+        # Use explicit filename if given, otherwise fall back to run_id
+        stem = filename or self._run_id
+        self._file_path = self._output_dir / f"{stem}.jsonl"
         self._step = 0
         self._file = open(self._file_path, "w", encoding="utf-8")
         self._start_time = time.monotonic()
+        # Write _meta header (skipped by dashboard event reader)
+        meta = json.dumps({"_meta": {"run_id": self._run_id}}, ensure_ascii=False)
+        self._file.write(meta + "\n")
+        self._file.flush()
         logger.info(f"Trajectory log: {self._file_path}")
 
     @property
     def file_path(self) -> Path:
         return self._file_path
 
-    def log(self, event_type: str, data: Any = None) -> None:
-        """Write a single event to the JSONL file."""
+    def log(self, event_type: str, data: Any = None, agent_path: list[str] | None = None) -> None:
+        """Write a single event to the JSONL file.
+
+        Args:
+            event_type: Event type name (e.g. ``llm_end``, ``tool_call``).
+            data: Event payload dict.
+            agent_path: List of agent IDs for hierarchical display.
+        """
         self._step += 1
-        entry = {
+        entry: dict[str, Any] = {
+            "run_id": self._run_id,
+            "seq": self._step,
             "timestamp": datetime.now(timezone.utc).isoformat(),
             "elapsed_s": round(time.monotonic() - self._start_time, 2),
             "step": self._step,
-            "type": event_type,
+            "event_type": event_type,
+            "agent_path": agent_path or ["orchestrator"],
             "data": data,
         }
         line = json.dumps(entry, ensure_ascii=False, default=str)
@@ -52,14 +72,18 @@ class TrajectoryLogger:
         self._file.flush()
 
     def log_langchain_messages(self, messages: list) -> None:
-        """Log all LangChain messages from a completed run as individual events."""
+        """Log all LangChain messages using dashboard-compatible event types."""
         from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 
         for msg in messages:
             if isinstance(msg, SystemMessage):
-                self.log("system_message", {"content": _truncate(str(msg.content), 2000)})
+                self.log("llm_start", {
+                    "messages": [{"type": "system", "content": _truncate(str(msg.content), 2000)}],
+                })
             elif isinstance(msg, HumanMessage):
-                self.log("user_message", {"content": _truncate(str(msg.content), 2000)})
+                self.log("llm_start", {
+                    "messages": [{"type": "human", "content": _truncate(str(msg.content), 2000)}],
+                })
             elif isinstance(msg, AIMessage):
                 data: dict[str, Any] = {"content": _truncate(str(msg.content), 2000)}
                 if msg.tool_calls:
@@ -69,17 +93,15 @@ class TrajectoryLogger:
                     ]
                 if hasattr(msg, "usage_metadata") and msg.usage_metadata:
                     data["usage"] = dict(msg.usage_metadata)
-                self.log("assistant_message", data)
+                self.log("llm_end", data)
             elif isinstance(msg, ToolMessage):
-                self.log(
-                    "tool_result",
-                    {
-                        "tool_call_id": msg.tool_call_id,
-                        "content": _truncate(str(msg.content), 3000),
-                    },
-                )
+                self.log("tool_result", {
+                    "tool_name": getattr(msg, "name", ""),
+                    "tool_call_id": msg.tool_call_id,
+                    "result": _truncate(str(msg.content), 3000),
+                })
             else:
-                self.log("unknown_message", {"type": type(msg).__name__, "content": _truncate(str(msg), 1000)})
+                self.log("llm_end", {"content": _truncate(str(msg), 1000)})
 
     def log_result(self, final_output: str, trace_id: str) -> None:
         """Log the final result."""

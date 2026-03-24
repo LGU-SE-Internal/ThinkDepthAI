@@ -129,6 +129,7 @@ class LanggraphRCAAgent:
         input: str,
         trace_id: str | None = None,
         data_dir: str | None = None,
+        trajectory_filename: str | None = None,
     ) -> AgentResult:
         """Run RCA analysis on an incident.
 
@@ -136,11 +137,13 @@ class LanggraphRCAAgent:
         graph node execution, while accumulating the final state for the result.
 
         Args:
-            input: Incident description text or list of descriptions.
+            input: Incident description text.
             trace_id: Optional trace ID for this run.
             data_dir: Path to the directory containing parquet data files.
                       Appended to the incident description so the LLM knows
                       where to find the telemetry data.
+            trajectory_filename: Stem for the trajectory JSONL file
+                (e.g. ``"sock-shop_case42"``).  Falls back to *trace_id*.
         """
         if not self._initialized:
             await self.build()
@@ -155,7 +158,11 @@ class LanggraphRCAAgent:
         # Setup trajectory logger if enabled
         traj_logger: TrajectoryLogger | None = None
         if self._trajectory_dir:
-            traj_logger = TrajectoryLogger(output_dir=self._trajectory_dir, run_id=trace_id)
+            traj_logger = TrajectoryLogger(
+                output_dir=self._trajectory_dir,
+                run_id=trace_id,
+                filename=trajectory_filename,
+            )
             traj_logger.log(
                 "run_start",
                 {
@@ -225,7 +232,10 @@ class LanggraphRCAAgent:
 
     @staticmethod
     def _log_node_event(traj_logger: TrajectoryLogger, node_name: str, node_output: dict) -> None:
-        """Log a single graph node execution event to JSONL."""
+        """Log graph node events in the format the dashboard frontend expects.
+
+        Uses ``event_type`` names: ``llm_end``, ``tool_call``, ``tool_result``.
+        """
         from langchain_core.messages import AIMessage, ToolMessage
 
         messages = node_output.get("messages", [])
@@ -233,29 +243,41 @@ class LanggraphRCAAgent:
         if node_name == "llm_call":
             for msg in messages:
                 if isinstance(msg, AIMessage):
-                    data: dict[str, Any] = {"content": msg.content[:2000] if isinstance(msg.content, str) else ""}
-                    if msg.tool_calls:
-                        data["tool_calls"] = [
-                            {"name": tc.get("name", ""), "args": tc.get("args", {})} for tc in msg.tool_calls
-                        ]
+                    data: dict[str, Any] = {
+                        "content": msg.content[:2000] if isinstance(msg.content, str) else "",
+                    }
                     if hasattr(msg, "usage_metadata") and msg.usage_metadata:
                         data["usage"] = dict(msg.usage_metadata)
-                    traj_logger.log("llm_response", data)
+                    if msg.tool_calls:
+                        data["tool_calls"] = [
+                            {"name": tc.get("name", ""), "args": tc.get("args", {})}
+                            for tc in msg.tool_calls
+                        ]
+                        traj_logger.log("llm_end", data)
+                        for tc in msg.tool_calls:
+                            traj_logger.log("tool_call", {
+                                "tool_name": tc.get("name", ""),
+                                "args": tc.get("args", {}),
+                                "tool_call_id": tc.get("id", ""),
+                            })
+                    else:
+                        traj_logger.log("llm_end", data)
 
         elif node_name == "tool_node":
             for msg in messages:
                 if isinstance(msg, ToolMessage):
-                    traj_logger.log(
-                        "tool_result",
-                        {
-                            "tool_call_id": msg.tool_call_id,
-                            "content": str(msg.content)[:3000],
-                        },
-                    )
+                    traj_logger.log("tool_result", {
+                        "tool_name": getattr(msg, "name", ""),
+                        "tool_call_id": msg.tool_call_id,
+                        "result": str(msg.content)[:3000],
+                    })
 
         elif node_name == "compress_rca_findings":
             findings = node_output.get("rca_findings", "")
-            traj_logger.log("compress_findings", {"rca_findings": findings[:5000]})
+            traj_logger.log("llm_end", {
+                "content": findings[:5000],
+                "node": "compress_rca_findings",
+            })
 
     @staticmethod
     def _extract_json_from_text(text: str) -> str | None:
