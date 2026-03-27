@@ -12,6 +12,10 @@ db_url: "sqlite:////home/nn/workspace/AgentM/eval.db"
 
 concurrency: 1
 max_samples: 1
+
+# Root path for dataset sources.
+# Resolved as: {source_path}/{source}/converted
+source_path: "/mnt/jfs/rcabench_dataset"
 judge_concurrency: 1
 
 judge_model:

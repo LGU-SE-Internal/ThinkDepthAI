@@ -1638,9 +1638,7 @@ dependencies = [
     { name = "pytz" },
     { name = "pyyaml" },
     { name = "rcabench-platform", extra = ["llm-eval"] },
-    { name = "rich" },
     { name = "tenacity" },
-    { name = "typer" },
 ]
 
 [package.dev-dependencies]
@@ -1665,9 +1663,7 @@ requires-dist = [
     { name = "pytz", specifier = ">=2026.1.post1" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "rcabench-platform", extras = ["llm-eval"], editable = "../proj/rcabench-platform" },
-    { name = "rich", specifier = ">=13.7.1" },
     { name = "tenacity", specifier = ">=8.2.0" },
-    { name = "typer", specifier = ">=0.21.1" },
 ]
 
 [package.metadata.requires-dev]
