@@ -47,6 +47,17 @@ class ThinkDepthAgent(BaseAgent):
 
         return version("thinkdepthai")
 
+    def model_name(self) -> str | None:
+        if self._config_path:
+            try:
+                from ..config import load_agent_config
+
+                config = load_agent_config(self._config_path)
+                return config.model.model_provider.model
+            except Exception:
+                return None
+        return None
+
     async def run(
         self,
         incident: str,

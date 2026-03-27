@@ -5,8 +5,10 @@ from __future__ import annotations
 import json
 import uuid
 from dataclasses import dataclass, field
+from datetime import datetime
 from typing import Any
 
+from langchain_core.messages import AIMessage, HumanMessage
 from rcabench_platform.v3.sdk.llm_eval.trajectory import Trajectory
 
 from .config import load_agent_config
@@ -14,6 +16,7 @@ from .config.schema import AgentConfig
 from .converters import TrajectoryConverter
 from .graph import build_rca_agent
 from .llm import create_langchain_model
+from .prompts import PromptManager
 from .tools import think_tool
 from .tools_lib import AsyncBaseToolkit, toolkit_to_langchain_tools
 from .tools_lib.query_parquet_toolkit import QueryParquetFilesToolkit
@@ -173,6 +176,23 @@ class LanggraphRCAAgent:
                 },
             )
 
+        # Reconstruct system prompt and user message for trajectory & dashboard
+        prompt_path = self.config.agent.prompt_path or "agents/langgraph/rca.yaml"
+        prompts = PromptManager.get_prompts(prompt_path)
+        date_str = datetime.now().strftime("%a %b %-d, %Y")
+        system_prompt_text = prompts["RCA_ANALYSIS_SP"].format(date=date_str)
+        user_message_text = prompts["RCA_ANALYSIS_UP"].format(
+            incident_description=incident_description
+        )
+
+        if traj_logger:
+            traj_logger.log("llm_start", {
+                "messages": [
+                    {"type": "system", "content": system_prompt_text[:2000]},
+                    {"type": "human", "content": user_message_text[:2000]},
+                ],
+            })
+
         initial_state = {
             "messages": [],
             "incident_description": incident_description,
@@ -211,9 +231,16 @@ class LanggraphRCAAgent:
 
         final_output = self._validate_causal_graph_json(rca_findings)
 
-        # Build trajectory using SDK schema
+        # Complete the message list: prepend user message, append compress output
+        all_messages = [HumanMessage(content=user_message_text)] + all_messages
+        if rca_findings:
+            all_messages.append(AIMessage(content=rca_findings))
+
+        # Build trajectory using SDK schema (system prompt set separately)
         agent_name = self.config.agent.name or "RCA-Agent"
-        agent_traj = TrajectoryConverter.from_langchain_messages(all_messages, agent_name=agent_name)
+        agent_traj = TrajectoryConverter.from_langchain_messages(
+            all_messages, agent_name=agent_name, system_prompt=system_prompt_text
+        )
         trajectory = Trajectory(agent_trajectories=[agent_traj])
 
         traj_file: str | None = None
@@ -236,7 +263,7 @@ class LanggraphRCAAgent:
 
         Uses ``event_type`` names: ``llm_end``, ``tool_call``, ``tool_result``.
         """
-        from langchain_core.messages import AIMessage, ToolMessage
+        from langchain_core.messages import ToolMessage
 
         messages = node_output.get("messages", [])
 

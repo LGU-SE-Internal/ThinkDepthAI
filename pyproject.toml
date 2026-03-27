@@ -17,7 +17,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pytz>=2026.1.post1",
     "pyyaml>=6.0.2",
-    "rcabench-platform[llm-eval]>=0.1.0",
+    "rcabench-platform[llm-eval]>=0.4.16",
     "tenacity>=8.2.0",
 ]
 
@@ -41,8 +41,8 @@ addopts = ["-v", "-s"]
 [tool.uv]
 index-url = "https://pypi.org/simple"
 
-[tool.uv.sources]
-rcabench-platform = { path = "/home/nn/workspace/proj/rcabench-platform", editable = true }
+#[tool.uv.sources]
+#rcabench-platform = { path = "/home/nn/workspace/proj/rcabench-platform", editable = true }
 
 [tool.ruff]
 line-length = 120
