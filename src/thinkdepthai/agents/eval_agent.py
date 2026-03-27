@@ -74,9 +74,6 @@ class ThinkDepthAgent(BaseAgent):
 
         run_id = str(uuid.uuid4())
 
-        if ctx:
-            ctx.emit({"type": "running", "run_id": run_id})
-
         agent_config = load_agent_config(self._config_path)
 
         # Build trajectory dir: {base}/{exp_id}/{case_name}.jsonl
@@ -85,6 +82,14 @@ class ThinkDepthAgent(BaseAgent):
             traj_dir = os.path.join(traj_dir, self._exp_id)
 
         traj_filename = self._case_name_from_data_dir(data_dir)
+
+        # Emit running + trajectory path BEFORE the run starts so the
+        # dashboard can stream events in real-time (not just after completion).
+        expected_traj_path = os.path.abspath(os.path.join(traj_dir, f"{traj_filename}.jsonl"))
+        if ctx:
+            ctx.emit({"type": "running", "run_id": run_id})
+            ctx.emit({"type": "trajectory_update", "path": expected_traj_path})
+
         agent = LanggraphRCAAgent(
             config=agent_config,
             trajectory_dir=traj_dir,
@@ -98,11 +103,7 @@ class ThinkDepthAgent(BaseAgent):
                 trajectory_filename=traj_filename,
             )
 
-        # Emit trajectory path so the dashboard can stream events
-        traj_file = result.metadata.get("trajectory_file")
-        if ctx and traj_file:
-            ctx.emit({"type": "trajectory_update", "path": traj_file})
-
+        traj_file = result.metadata.get("trajectory_file") or expected_traj_path
         return AgentResult(
             response=result.final_output or "",
             trajectory=result.trajectory if isinstance(result.trajectory, Trajectory) else None,
