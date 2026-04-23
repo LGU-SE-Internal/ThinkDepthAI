@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 
-from rcabench_platform.v3.sdk.llm_eval.trajectory import AgentTrajectory, Message, ToolCall, Trajectory, Turn
+from rcabench_platform.v3.sdk.llm_eval.trajectory import AgentTrajectory, Message, ToolCall, Turn
 
 
 class TrajectoryConverter:

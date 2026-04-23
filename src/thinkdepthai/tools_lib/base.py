@@ -7,14 +7,14 @@ F = TypeVar("F", bound=Callable[..., Any])
 
 
 @overload
-def register_tool(name_or_func: F) -> F: ...
+def register_tool[F: Callable[..., Any]](name_or_func: F) -> F: ...
 
 
 @overload
 def register_tool(name_or_func: str | None = None) -> Callable[[F], F]: ...
 
 
-def register_tool(name_or_func: str | F | None = None) -> F | Callable[[F], F]:
+def register_tool[F: Callable[..., Any]](name_or_func: str | F | None = None) -> F | Callable[[F], F]:
     """Decorator to register a method as a tool.
 
     Usage:

@@ -40,7 +40,7 @@ class _GraphConfig:
 
 def _fix_gemini_thought_signatures(messages: list) -> list:
     """Fix Gemini thought signatures to work around LangChain bug."""
-    for i, msg in enumerate(messages):
+    for _i, msg in enumerate(messages):
         if isinstance(msg, AIMessage) and hasattr(msg, "additional_kwargs") and msg.additional_kwargs:
             if "__gemini_function_call_thought_signatures__" in msg.additional_kwargs:
                 thought_sigs = msg.additional_kwargs["__gemini_function_call_thought_signatures__"]

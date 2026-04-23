@@ -2,8 +2,6 @@
 
 import json
 
-import pytest
-
 
 def test_import_agent():
     """Verify the agent can be imported."""

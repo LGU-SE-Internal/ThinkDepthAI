@@ -4,7 +4,6 @@ import json
 import os
 from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
 
 import duckdb
 
@@ -170,15 +169,18 @@ class QueryParquetFilesToolkit(AsyncBaseToolkit):
         for file_path in dir_path.glob("*.parquet"):
             try:
                 conn = duckdb.connect(":memory:")
-                row_count_result = conn.execute(
-                    f"SELECT COUNT(*) FROM read_parquet('{file_path}')"
-                ).fetchone()
+                row_count_result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{file_path}')").fetchone()
                 row_count = row_count_result[0] if row_count_result else 0
                 result = conn.execute(f"SELECT * FROM read_parquet('{file_path}') LIMIT 0")
                 column_count = len(result.description)
                 conn.close()
                 files_info.append(
-                    {"filename": file_path.name, "path": str(file_path), "row_count": row_count, "column_count": column_count}
+                    {
+                        "filename": file_path.name,
+                        "path": str(file_path),
+                        "row_count": row_count,
+                        "column_count": column_count,
+                    }
                 )
             except Exception as e:
                 files_info.append({"filename": file_path.name, "path": str(file_path), "error": str(e)})

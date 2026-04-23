@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
 
@@ -31,7 +31,7 @@ class TrajectoryLogger:
     ):
         self._output_dir = Path(output_dir)
         self._output_dir.mkdir(parents=True, exist_ok=True)
-        self._run_id = run_id or datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        self._run_id = run_id or datetime.now(UTC).strftime("%Y%m%d_%H%M%S")
         # Use explicit filename if given, otherwise fall back to run_id
         stem = filename or self._run_id
         self._file_path = self._output_dir / f"{stem}.jsonl"
@@ -60,7 +60,7 @@ class TrajectoryLogger:
         entry: dict[str, Any] = {
             "run_id": self._run_id,
             "seq": self._step,
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
             "elapsed_s": round(time.monotonic() - self._start_time, 2),
             "step": self._step,
             "event_type": event_type,

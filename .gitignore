@@ -14,3 +14,4 @@ trajectories/
 .ruff_cache/
 *.log
 *.pyc
+hf_upload

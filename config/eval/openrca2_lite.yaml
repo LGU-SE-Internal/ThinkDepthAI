@@ -10,7 +10,7 @@ data:
   tags:
     - openrca2-lite
 
-db_url: "sqlite:////home/nn/workspace/AgentM/eval.db"
+db_url: "sqlite:///eval.db"
 
 concurrency: 5
 judge_concurrency: 5
