@@ -347,3 +347,25 @@ uv run rca llm-eval run config/eval/openrca2_lite.yaml \
   -a thinkdepthai \
   --source-path ./data
 ```
+
+---
+
+## Alternative: OpenRCA-2.0-Lite v1 evaluation
+
+Evaluate against the published [`lincyaw/openrca2-lite-v1`](https://huggingface.co/datasets/lincyaw/openrca2-lite-v1) dataset (635 cases curated for end-to-end causal-chain verification, ~6.6 GB). Coexists with the `openrca2-lite` flow above.
+
+```bash
+# 1. Pull the dataset (~6.6 GB) — produces a folder with MANIFEST.json + per-case dirs
+hf download lincyaw/openrca2-lite-v1 --repo-type dataset --local-dir ./data/openrca2_lite_v1
+
+# 2. Point .env at it (or pass --lite-root)
+echo 'LITE_V1_ROOT=./data/openrca2_lite_v1' >> .env
+
+# 3. Seed eval rows from the snapshot (uses meta.source_data_dir; no source_path needed)
+uv run python scripts/seed_lite_v1_db.py
+
+# 4. Run
+uv run rca llm-eval run config/eval/openrca2_lite_v1.yaml -a thinkdepthai
+```
+
+`config/eval/openrca2_lite_v1.yaml` reads `LLM_EVAL_DB_URL` from env. The seeder writes per-row `meta.source_data_dir` so the eval doesn't need a global `source_path`. Tag scheme: rows carry `openrca2-lite-v1` plus `-old` (403 carried-over cases) or `-new` (232 added in v1 curation); `config/eval/openrca2_lite_v1_new.yaml` filters to the `-new` subset for shared-DB scenarios. `scripts/check_preprocess.py <config>` runs the preprocess step only (no LLM cost) for format checks.
