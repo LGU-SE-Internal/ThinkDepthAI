@@ -1,22 +1,38 @@
 #!/usr/bin/env python3
-"""Seed the llm_eval DB with the dataset_v1_500_2026-05-02 cases.
+"""Seed the llm_eval DB with the dataset_v1_500 cases.
 
-This curated 500-case set lives at ``<dataset_root>/cases/<name>``, where each
-``<name>`` is a symlink to a bare source case dir (parquets + injection.json).
-The companion pool at ``<pool_root>/<name>/converted/`` adds the regenerated
-``causal_graph.json`` (and re-symlinks the parquets), which is what the v2
-RCABenchProcesser needs to compute alarm endpoints + graph metrics.
+Two on-disk layouts are supported. Pick whichever matches what you have:
+
+- **HF snapshot (recommended for fresh installs)**: a single root with
+  ``MANIFEST.json`` plus per-case directories that each contain
+  ``injection.json``, ``causal_graph.json``, and the telemetry parquets. This
+  is the layout published as `lincyaw/openrca2-v1-500
+  <https://huggingface.co/datasets/lincyaw/openrca2-v1-500>`_. Pass
+  ``--snapshot-root`` (or set ``DATASET_V1_500_ROOT`` in your env / .env).
+- **Local pool layout**: cases live at ``<dataset_root>/cases/<name>`` as
+  symlinks into ``<pool_root>/<name>/converted/`` (the on-disk format used
+  during dataset construction). Pass both ``--dataset-root`` and
+  ``--pool-root`` to use this mode.
 
 Each case is inserted as a ``DatasetSample`` keyed by
-``(dataset="RCABench", source=<name>)``. ``meta.source_data_dir`` is set to
-``<pool_root>/<name>/converted/`` so the processer reads the correct dir.
+``(dataset="RCABench", source=<name>)``. ``meta.source_data_dir`` points at
+the per-case directory so the v2 RCABenchProcesser reads the right files
+without any global ``source_path`` override.
 
 Usage::
 
-    LLM_EVAL_DB_URL=sqlite:///./eval.db \
-        python scripts/seed_dataset_v1_db.py \
-            --dataset-root /home/ddq/AoyangSpace/dataset/dataset_v1_500_2026-05-02 \
-            --pool-root /home/ddq/AoyangSpace/dataset/_pool_v1_2026-05-02
+    # HF snapshot:
+    hf download lincyaw/openrca2-v1-500 --repo-type dataset \\
+        --local-dir ./data/openrca2_v1_500
+    LLM_EVAL_DB_URL=sqlite:///./eval.db \\
+        python scripts/seed_dataset_v1_db.py \\
+            --snapshot-root ./data/openrca2_v1_500
+
+    # Local pool layout:
+    LLM_EVAL_DB_URL=sqlite:///./eval.db \\
+        python scripts/seed_dataset_v1_db.py \\
+            --dataset-root /path/to/dataset_v1_500_2026-05-02 \\
+            --pool-root /path/to/_pool_v1_2026-05-02
 """
 from __future__ import annotations
 
@@ -35,18 +51,25 @@ except ImportError:
     pass
 
 
-DEFAULT_DATASET_ROOT = "/home/ddq/AoyangSpace/dataset/dataset_v1_500_2026-05-02"
-DEFAULT_POOL_ROOT = "/home/ddq/AoyangSpace/dataset/_pool_v1_2026-05-02"
+DEFAULT_SNAPSHOT_ROOT = os.environ.get("DATASET_V1_500_ROOT")
 DEFAULT_TAG = "dataset_v1_500"
 DEFAULT_DATASET = "RCABench"
 
 
 def parse_args() -> argparse.Namespace:
-    p = argparse.ArgumentParser(description=__doc__)
-    p.add_argument("--dataset-root", default=DEFAULT_DATASET_ROOT,
-                   help=f"Path with cases/ subdir (default: {DEFAULT_DATASET_ROOT})")
-    p.add_argument("--pool-root", default=DEFAULT_POOL_ROOT,
-                   help=f"Pool root containing <case>/converted/causal_graph.json (default: {DEFAULT_POOL_ROOT})")
+    p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
+    p.add_argument(
+        "--snapshot-root",
+        default=DEFAULT_SNAPSHOT_ROOT,
+        help=(
+            "Path to the HF snapshot root (must contain MANIFEST.json plus per-case dirs). "
+            "Defaults to $DATASET_V1_500_ROOT if set."
+        ),
+    )
+    p.add_argument("--dataset-root", default=None,
+                   help="(Local pool layout) Path with cases/ subdir of symlinks.")
+    p.add_argument("--pool-root", default=None,
+                   help="(Local pool layout) Path containing <case>/converted/causal_graph.json.")
     p.add_argument("--db-url", default=None, help="Overrides LLM_EVAL_DB_URL.")
     p.add_argument("--tag", default=DEFAULT_TAG, help=f"Tag for inserted rows (default: {DEFAULT_TAG})")
     p.add_argument("--dataset", default=DEFAULT_DATASET, help=f"Dataset field (default: {DEFAULT_DATASET})")
@@ -83,8 +106,7 @@ def extract_rc_services(injection: dict[str, Any]) -> list[str]:
     return services
 
 
-def build_row(case_name: str, pool_root: Path, dataset: str, tag: str, idx: int) -> dict[str, Any] | None:
-    case_dir = pool_root / case_name / "converted"
+def build_row(case_name: str, case_dir: Path, dataset: str, tag: str, idx: int) -> dict[str, Any] | None:
     injection_path = case_dir / "injection.json"
     causal_path = case_dir / "causal_graph.json"
     if not injection_path.exists() or not causal_path.exists():
@@ -121,8 +143,38 @@ def build_row(case_name: str, pool_root: Path, dataset: str, tag: str, idx: int)
     }
 
 
-def main() -> int:
-    args = parse_args()
+def discover_cases(args: argparse.Namespace) -> list[tuple[str, Path]]:
+    """Resolve (case_name, case_dir) pairs from whichever layout the user provided.
+
+    Returns a list of (case_name, absolute_case_dir) tuples in deterministic order.
+    """
+    if args.snapshot_root:
+        snap_root = Path(args.snapshot_root).expanduser().resolve()
+        if not snap_root.is_dir():
+            sys.exit(f"--snapshot-root {snap_root} is not a directory")
+        manifest_path = snap_root / "MANIFEST.json"
+        if manifest_path.is_file():
+            manifest = json.loads(manifest_path.read_text())
+            entries = manifest.get("cases") or []
+            case_names = [str(e.get("name") or e.get("case")) for e in entries if (e.get("name") or e.get("case"))]
+            if not case_names:
+                sys.exit(f"MANIFEST.json at {manifest_path} has no cases")
+            print(f"Loaded {len(case_names)} cases from MANIFEST.json")
+        else:
+            # Fallback: list directories that look like cases.
+            case_names = sorted(
+                p.name for p in snap_root.iterdir()
+                if p.is_dir() and (p / "injection.json").is_file()
+            )
+            print(f"No MANIFEST.json at {manifest_path}; discovered {len(case_names)} case dirs by injection.json")
+        return [(name, snap_root / name) for name in case_names]
+
+    if not (args.dataset_root and args.pool_root):
+        sys.exit(
+            "No source layout given. Pass --snapshot-root <hf_dir> (or set "
+            "DATASET_V1_500_ROOT in your env / .env) for the HF snapshot layout, "
+            "or --dataset-root + --pool-root for the legacy local pool layout."
+        )
     dataset_root = Path(args.dataset_root).expanduser().resolve()
     pool_root = Path(args.pool_root).expanduser().resolve()
     cases_dir = dataset_root / "cases"
@@ -130,18 +182,25 @@ def main() -> int:
         sys.exit(f"cases dir missing: {cases_dir}")
     if not pool_root.is_dir():
         sys.exit(f"pool root missing: {pool_root}")
-
     case_names = sorted(p.name for p in cases_dir.iterdir())
+    print(f"Loaded {len(case_names)} cases from {cases_dir}")
+    return [(name, pool_root / name / "converted") for name in case_names]
+
+
+def main() -> int:
+    args = parse_args()
+
+    case_pairs = discover_cases(args)
     if args.cases_from:
         whitelist = {ln.strip() for ln in Path(args.cases_from).read_text().splitlines() if ln.strip()}
-        case_names = [n for n in case_names if n in whitelist]
+        case_pairs = [pair for pair in case_pairs if pair[0] in whitelist]
+        print(f"Filtered to {len(case_pairs)} cases via {args.cases_from}")
     if args.max_cases is not None:
-        case_names = case_names[: args.max_cases]
-    print(f"Loaded {len(case_names)} cases from {cases_dir}")
+        case_pairs = case_pairs[: args.max_cases]
 
     rows: list[dict[str, Any]] = []
-    for i, name in enumerate(case_names, start=1):
-        row = build_row(name, pool_root, args.dataset, args.tag, idx=i)
+    for i, (name, case_dir) in enumerate(case_pairs, start=1):
+        row = build_row(name, case_dir, args.dataset, args.tag, idx=i)
         if row is not None:
             rows.append(row)
     print(f"Built {len(rows)} valid rows (dataset={args.dataset}, tag={args.tag})")

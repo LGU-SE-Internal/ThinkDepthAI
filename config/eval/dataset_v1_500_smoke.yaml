@@ -16,12 +16,11 @@ concurrency: 1
 judge_concurrency: 1
 max_samples: 1
 
-# Override per-row meta.source_data_dir: every dataset_v1_500 case lives under
-# <pool_root>/<case>/converted/ regardless of whether the row was newly
-# inserted or merged into an existing lite_v1 row — the source_path resolver
-# beats meta.source_data_dir, so this guarantees consistent paths.
-source_path: "/home/ddq/AoyangSpace/dataset/_pool_v1_2026-05-02"
-source_path_pattern: "{source_path}/{source}/converted"
+# source_path is intentionally omitted: each DatasetSample row's
+# meta.source_data_dir already points at the absolute case directory
+# (set by scripts/seed_dataset_v1_db.py). For shared-DB scenarios where
+# rows came from a different layout, set source_path / source_path_pattern
+# here to override.
 
 judge_model:
   model_provider:

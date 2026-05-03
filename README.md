@@ -369,3 +369,25 @@ uv run rca llm-eval run config/eval/openrca2_lite_v1.yaml -a thinkdepthai
 ```
 
 `config/eval/openrca2_lite_v1.yaml` reads `LLM_EVAL_DB_URL` from env. The seeder writes per-row `meta.source_data_dir` so the eval doesn't need a global `source_path`. Tag scheme: rows carry `openrca2-lite-v1` plus `-old` (403 carried-over cases) or `-new` (232 added in v1 curation); `config/eval/openrca2_lite_v1_new.yaml` filters to the `-new` subset for shared-DB scenarios. `scripts/check_preprocess.py <config>` runs the preprocess step only (no LLM cost) for format checks.
+
+---
+
+## Alternative: dataset_v1_500 (v2 evaluator) evaluation
+
+Evaluate against the published [`lincyaw/openrca2-v1-500`](https://huggingface.co/datasets/lincyaw/openrca2-v1-500) dataset (500 cases sampled across `ts`, `hs`, `otel-demo`; ~3.4 GB). Pairs with `rcabench-platform >= 0.4.24`'s v2 evaluator (type-aware fault matching, DuckDB SQL evidence verification, LLM-judge chain coherence).
+
+```bash
+# 1. Pull the dataset (~3.4 GB) — produces a folder with MANIFEST.json + per-case dirs
+hf download lincyaw/openrca2-v1-500 --repo-type dataset --local-dir ./data/openrca2_v1_500
+
+# 2. Point .env at it (or pass --snapshot-root)
+echo 'DATASET_V1_500_ROOT=./data/openrca2_v1_500' >> .env
+
+# 3. Seed eval rows (writes per-row meta.source_data_dir; no global source_path needed)
+uv run python scripts/seed_dataset_v1_db.py
+
+# 4. Smoke (1 sample)
+uv run rca llm-eval run config/eval/dataset_v1_500_smoke.yaml -a thinkdepthai
+```
+
+The seeder accepts either `--snapshot-root` (HF layout) or `--dataset-root + --pool-root` (local pool layout used during dataset construction). Tag is `dataset_v1_500`; both configs read `LLM_EVAL_DB_URL` from env.
