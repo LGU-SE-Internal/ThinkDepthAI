@@ -1,0 +1,35 @@
+exp_id: "thinkdepthai_v2_smoke"
+agent_type: "langgraph_rca"
+model_name: ""
+
+data:
+  dataset: "RCABench"
+  type: single
+  question_field: question
+  gt_field: answer
+  tags:
+    - openrca2-lite
+
+db_url: "sqlite:///eval.db"
+
+concurrency: 1
+judge_concurrency: 1
+max_samples: 1
+
+# Original openrca2-lite case dirs — flat, parquets at case-dir level. The
+# 376 cases in eval.db that overlap with dataset_v1 also live here (dataset_v1
+# is a symlink wrapper over this same /dataset/rca directory + extra batch-*
+# cases from aegisctl that are not in eval.db anyway).
+source_path: "/home/ddq/AoyangSpace/dataset/rca"
+source_path_pattern: "{source_path}/{source}"
+
+judge_model:
+  model_provider:
+    type: chat.completions
+    model: ${UTU_LLM_MODEL}
+    base_url: ${UTU_LLM_BASE_URL}
+    api_key: ${UTU_LLM_API_KEY}
+  rate_limit:
+    rpm: 500
+    tpm: 320000
+    max_retries: 20

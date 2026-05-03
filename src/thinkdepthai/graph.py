@@ -108,7 +108,10 @@ async def tool_node(state: RCAState, cfg: _GraphConfig):
         ToolMessage(content=str(observation), tool_call_id=tool_call["id"])
         for observation, tool_call in zip(observations, tool_calls, strict=False)
     ]
-    return {"messages": tool_outputs}
+    return {
+        "messages": tool_outputs,
+        "tool_call_iterations": (state.get("tool_call_iterations", 0) or 0) + 1,
+    }
 
 
 async def compress_rca_findings(state: RCAState, model, cfg: _GraphConfig):
@@ -143,12 +146,18 @@ async def compress_rca_findings(state: RCAState, model, cfg: _GraphConfig):
     }
 
 
+_MAX_TOOL_ITERATIONS = 15
+
+
 def should_continue(state: RCAState) -> Literal["tool_node", "compress_rca_findings"]:
-    """Determine whether to continue investigation or compress findings."""
+    """Continue investigation only while under the iteration cap."""
     messages = state["messages"]
     last_message = cast(AIMessage, messages[-1])
-    if last_message.tool_calls:
+    iters = state.get("tool_call_iterations", 0) or 0
+    if last_message.tool_calls and iters < _MAX_TOOL_ITERATIONS:
         return "tool_node"
+    if last_message.tool_calls:
+        logger.info(f"Tool-iteration cap {_MAX_TOOL_ITERATIONS} reached; forcing compress.")
     return "compress_rca_findings"
 
 

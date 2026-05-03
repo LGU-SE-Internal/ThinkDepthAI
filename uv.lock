@@ -1994,7 +1994,7 @@ wheels = [
 
 [[package]]
 name = "rcabench-platform"
-version = "0.4.23"
+version = "0.4.24"
 source = { registry = "https://pypi.org/simple" }
 dependencies = [
     { name = "loguru" },
@@ -2003,9 +2003,9 @@ dependencies = [
     { name = "tqdm" },
     { name = "typer" },
 ]
-sdist = { url = "https://files.pythonhosted.org/packages/1d/ad/9a82b9c0e3c7990abd5cfdda6cb4513cbd2007b113e29f593220461ab347/rcabench_platform-0.4.23.tar.gz", hash = "sha256:ae0b0c86f5978f94bc0bca044953a014368ca866c74da36aa8b56904a1106f07", size = 639237, upload-time = "2026-05-03T04:47:48.745Z" }
+sdist = { url = "https://files.pythonhosted.org/packages/1d/11/cda5bde018a1d92435a3b5e4208b38c95b9be1ab0d95c20e8f8de1809ec9/rcabench_platform-0.4.24.tar.gz", hash = "sha256:e0724a3dbe17803610f14b00f732f8bf6dcc2128e2be476b39aa6e4152f00ad8", size = 651250, upload-time = "2026-05-03T09:52:30.105Z" }
 wheels = [
-    { url = "https://files.pythonhosted.org/packages/13/63/ac4c66926fe781cd0d5268af2e86ce1c1e4dbca8c6f7e02132da97347aea/rcabench_platform-0.4.23-py3-none-any.whl", hash = "sha256:f69b512c342c133f3e6c73b656bcc5fac3624be6ce8a4f501092c472ee0632db", size = 817023, upload-time = "2026-05-03T04:47:47.208Z" },
+    { url = "https://files.pythonhosted.org/packages/72/4c/cf95ce6952f6779be420a0018ac352ce8e6e6c97215b4c05b0ea68b77ffe/rcabench_platform-0.4.24-py3-none-any.whl", hash = "sha256:c8511f2810abac7e0fda145802a8b326d650b9fe6d0e2c057afef0db7213f847", size = 834818, upload-time = "2026-05-03T09:52:27.955Z" },
 ]
 
 [package.optional-dependencies]
@@ -2335,7 +2335,7 @@ requires-dist = [
     { name = "python-dotenv", specifier = ">=1.2.2" },
     { name = "pytz", specifier = ">=2026.1.post1" },
     { name = "pyyaml", specifier = ">=6.0.2" },
-    { name = "rcabench-platform", extras = ["llm-eval"], specifier = ">=0.4.23" },
+    { name = "rcabench-platform", extras = ["llm-eval"], specifier = ">=0.4.24" },
     { name = "tenacity", specifier = ">=8.2.0" },
 ]
 

@@ -1,0 +1,35 @@
+exp_id: "thinkdepthai_dataset_v1_500_smoke"
+agent_type: "langgraph_rca"
+model_name: ""
+
+data:
+  dataset: "RCABench"
+  type: single
+  question_field: question
+  gt_field: answer
+  tags:
+    - dataset_v1_500
+
+# db_url read from $LLM_EVAL_DB_URL.
+
+concurrency: 1
+judge_concurrency: 1
+max_samples: 1
+
+# Override per-row meta.source_data_dir: every dataset_v1_500 case lives under
+# <pool_root>/<case>/converted/ regardless of whether the row was newly
+# inserted or merged into an existing lite_v1 row — the source_path resolver
+# beats meta.source_data_dir, so this guarantees consistent paths.
+source_path: "/home/ddq/AoyangSpace/dataset/_pool_v1_2026-05-02"
+source_path_pattern: "{source_path}/{source}/converted"
+
+judge_model:
+  model_provider:
+    type: chat.completions
+    model: ${UTU_LLM_MODEL}
+    base_url: ${UTU_LLM_BASE_URL}
+    api_key: ${UTU_LLM_API_KEY}
+  rate_limit:
+    rpm: 500
+    tpm: 320000
+    max_retries: 20

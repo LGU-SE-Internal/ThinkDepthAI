@@ -9,6 +9,7 @@ build/
 *.db
 logs/
 eval-data/
+data/
 trajectories/
 .pytest_cache/
 .ruff_cache/

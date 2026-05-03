@@ -361,30 +361,26 @@ class LanggraphRCAAgent:
 
     @staticmethod
     def _validate_causal_graph_json(causal_graph_output: str) -> str:
-        """Validate and clean CausalGraph JSON output."""
+        """Validate the v2 RCA output schema produced by the synthesis node.
+
+        Required shape:
+            {"root_causes": [...], "propagation": [...]}
+        with each `root_causes[i]` carrying `service`, `fault_kind`, and at
+        least one `evidence` item. Failures are returned as a JSON envelope
+        carrying `parse_error`/`parse_warning` plus a truncated `raw_output`
+        so the downstream eval can record what the model emitted.
+        """
+        empty_envelope = {"root_causes": [], "propagation": []}
         if not causal_graph_output or not causal_graph_output.strip():
-            logger.warning("CausalGraph output is empty")
-            return json.dumps(
-                {
-                    "nodes": [],
-                    "edges": [],
-                    "root_causes": [],
-                    "component_to_service": {},
-                    "parse_error": "Empty output",
-                },
-                ensure_ascii=False,
-            )
+            logger.warning("RCA output is empty")
+            return json.dumps({**empty_envelope, "parse_error": "Empty output"}, ensure_ascii=False)
 
         extracted_json = LanggraphRCAAgent._extract_json_from_text(causal_graph_output)
-
         if not extracted_json:
-            logger.warning("Could not extract JSON from CausalGraph output")
+            logger.warning("Could not extract JSON from RCA output")
             return json.dumps(
                 {
-                    "nodes": [],
-                    "edges": [],
-                    "root_causes": [],
-                    "component_to_service": {},
+                    **empty_envelope,
                     "parse_error": "Could not find JSON in output",
                     "raw_output": causal_graph_output[:500],
                 },
@@ -393,50 +389,56 @@ class LanggraphRCAAgent:
 
         try:
             parsed = json.loads(extracted_json)
-            if not isinstance(parsed, dict):
-                raise ValueError("Output is not a JSON object")
-
-            required_fields = ["nodes", "edges", "root_causes"]
-            missing_fields = [f for f in required_fields if f not in parsed]
-
-            if missing_fields:
-                logger.warning(f"CausalGraph missing fields: {missing_fields}")
-                return json.dumps(
-                    {
-                        "nodes": parsed.get("nodes", []),
-                        "edges": parsed.get("edges", []),
-                        "root_causes": parsed.get("root_causes", []),
-                        "component_to_service": parsed.get("component_to_service", {}),
-                        "parse_warning": f"Missing: {missing_fields}",
-                    },
-                    ensure_ascii=False,
-                )
-
-            return json.dumps(parsed, ensure_ascii=False)
-
         except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse CausalGraph JSON: {e}")
+            logger.error(f"Failed to parse RCA JSON: {e}")
             return json.dumps(
                 {
-                    "nodes": [],
-                    "edges": [],
-                    "root_causes": [],
-                    "component_to_service": {},
+                    **empty_envelope,
                     "parse_error": f"JSON decode error: {e}",
                     "raw_output": causal_graph_output[:500],
                 },
                 ensure_ascii=False,
             )
-        except Exception as e:
-            logger.error(f"Unexpected error validating CausalGraph: {e}")
+
+        if not isinstance(parsed, dict):
             return json.dumps(
                 {
-                    "nodes": [],
-                    "edges": [],
-                    "root_causes": [],
-                    "component_to_service": {},
-                    "validation_error": str(e),
+                    **empty_envelope,
+                    "parse_error": "Output is not a JSON object",
                     "raw_output": causal_graph_output[:500],
                 },
                 ensure_ascii=False,
             )
+
+        warnings: list[str] = []
+        root_causes = parsed.get("root_causes")
+        if not isinstance(root_causes, list) or not root_causes:
+            warnings.append("root_causes missing or empty")
+            root_causes = []
+
+        cleaned_root_causes: list[dict] = []
+        for i, rc in enumerate(root_causes):
+            if not isinstance(rc, dict):
+                warnings.append(f"root_causes[{i}] is not an object; dropping")
+                continue
+            if not rc.get("service"):
+                warnings.append(f"root_causes[{i}] missing `service`; dropping")
+                continue
+            if not rc.get("fault_kind"):
+                warnings.append(f"root_causes[{i}] missing `fault_kind`; dropping")
+                continue
+            evidence = rc.get("evidence")
+            if not isinstance(evidence, list) or not evidence:
+                warnings.append(f"root_causes[{i}] has no evidence; dropping")
+                continue
+            cleaned_root_causes.append(rc)
+
+        propagation = parsed.get("propagation")
+        if not isinstance(propagation, list):
+            propagation = []
+
+        result: dict = {"root_causes": cleaned_root_causes, "propagation": propagation}
+        if warnings:
+            result["parse_warning"] = "; ".join(warnings)
+            logger.warning(f"RCA v2 schema warnings: {result['parse_warning']}")
+        return json.dumps(result, ensure_ascii=False)
