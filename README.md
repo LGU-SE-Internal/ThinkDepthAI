@@ -185,209 +185,55 @@ class RCAState(TypedDict):
 
 ## Evaluation
 
-### Prerequisites
+The agent is scored against [`lincyaw/openrca2-lite-v3`](https://huggingface.co/datasets/lincyaw/openrca2-lite-v3) — 500 curated cases (`ts` / `hs` / `otel-demo`, ~3.8 GB) whose `causal_graph.json` files come from the manifest-driven reasoner shipped in `rcabench-platform >= 0.4.34`. The eval pipeline uses the v2 evaluator (single-tier `(service, fault_kind)` match + DuckDB SQL evidence verification + per-evidence LLM judge).
 
-1. Install dependencies with all extras:
+### One-time setup
 
 ```bash
+# 1. Install with all extras
 uv sync
-```
 
-2. Configure environment variables in `.env`:
-
-```bash
+# 2. Configure LLM creds in .env
+cat >> .env <<'EOF'
 UTU_LLM_TYPE=chat.completions
 UTU_LLM_MODEL=<your-model>
 UTU_LLM_BASE_URL=<your-api-base-url>
 UTU_LLM_API_KEY=<your-api-key>
+EOF
+
+# 3. Pull the dataset (~3.8 GB, 500 cases × ~17 files each)
+hf download lincyaw/openrca2-lite-v3 --repo-type dataset \
+  --local-dir ./data/openrca2_lite_v3
+
+# 4. Point .env at the snapshot (or pass --root every time)
+echo 'OPENRCA2_LITE_V3_ROOT=./data/openrca2_lite_v3' >> .env
+
+# 5. Seed eval rows from manifest.jsonl. Each row's meta.source_data_dir
+#    points at <root>/cases/<name>, so no global source_path is needed.
+LLM_EVAL_DB_URL=sqlite:///./eval.db \
+  uv run python scripts/seed_v3_db.py
 ```
 
-3. Prepare the dataset at `/mnt/jfs/rcabench_dataset` (or override with `--source-path`).
-
-4. Prepare the evaluation database. The pipeline requires pre-registered samples in the `data` table. If you have an existing PostgreSQL database with RCABench data, export the `openrca2-lite` subset to a local SQLite file:
+### Run evaluation
 
 ```bash
-# Example: export from PostgreSQL to SQLite
-uv run python3 -c "
-import json
-from sqlmodel import create_engine, text, SQLModel
-
-pg = create_engine('postgresql://user:pass@host/db')
-sqlite = create_engine('sqlite:///eval.db')
-SQLModel.metadata.create_all(sqlite)
-
-with pg.connect() as src:
-    rows = src.execute(text(\"SELECT * FROM data WHERE tags::jsonb @> '[\\\"openrca2-lite\\\"]'\")).fetchall()
-
-with sqlite.connect() as dst:
-    for row in rows:
-        dst.execute(text('''
-            INSERT INTO data (id, dataset, \"index\", source, source_index, question, answer, topic, level, file_name, meta, tags)
-            VALUES (:id, :dataset, :index, :source, :source_index, :question, :answer, :topic, :level, :file_name, :meta, :tags)
-        '''), {
-            'id': row[0], 'dataset': row[1], 'index': row[2], 'source': row[3],
-            'source_index': row[4], 'question': row[5], 'answer': row[6],
-            'topic': row[7], 'level': row[8], 'file_name': row[9],
-            'meta': json.dumps(row[10]) if row[10] else None,
-            'tags': json.dumps(row[11]) if row[11] else None
-        })
-    dst.commit()
-"
+# Smoke (1 sample) — picks the first case from the v3 tag.
+uv run rca llm-eval run config/eval/openrca2_lite_v3_smoke.yaml -a thinkdepthai
 ```
 
-Then set `db_url` in the config:
+`config/eval/openrca2_lite_v3_smoke.yaml` reads `LLM_EVAL_DB_URL` from env and filters to rows tagged `openrca2-lite-v3`. To go past 1 sample, edit `max_samples` in the YAML or pass `-l <N>` on the CLI. To launch with the realtime dashboard, add `--dashboard --dashboard-port 8766`.
 
-```yaml
-# config/eval/openrca2_lite.yaml
-db_url: "sqlite:///eval.db"
-```
+### Format-only check (no LLM cost)
 
-### Running Evaluation
+`scripts/check_preprocess.py <config>` runs the preprocess step against the registered samples — useful for validating that the dataset layout, DB rows, and per-case `meta.source_data_dir` are wired up correctly without spending tokens.
 
-Run the full pipeline (preprocess + rollout + judge + stat) with the ThinkDepthAI agent:
+### Local dataset layout (no HF download)
+
+If you already have the v3 dataset on disk (e.g. via a local pool build, or rsync'd from another machine), point `--root` at the directory containing `manifest.jsonl` and `cases/`:
 
 ```bash
-uv run rca llm-eval run config/eval/openrca2_lite.yaml \
-  -a thinkdepthai \
-  --source-path /mnt/jfs/rcabench_dataset
+LLM_EVAL_DB_URL=sqlite:///./eval.db \
+  uv run python scripts/seed_v3_db.py --root /path/to/dataset_v3_500_2026-05-03
 ```
 
-Limit to a single sample for quick testing:
-
-```bash
-uv run rca llm-eval run config/eval/openrca2_lite.yaml \
-  -a thinkdepthai \
-  --source-path /mnt/jfs/rcabench_dataset \
-  -l 1 
-```
-
-Launch with real-time dashboard:
-
-```bash
-uv run rca llm-eval run config/eval/openrca2_lite.yaml \
-  -a thinkdepthai \
-  --source-path /mnt/jfs/rcabench_dataset \
-  --dashboard \
-  --dashboard-port 8766
-```
-
-
-## Setup on a Fresh Machine
-
-To run evaluation on a new machine, you need three things: the code, the dataset metadata (in `eval.db`), and the telemetry data.
-
-### Quick Start
-
-```bash
-# 1. Clone the repository
-git clone <repo-url>
-cd ThinkDepthAI
-
-# 2. Run the setup script
-./scripts/setup_eval_env.sh
-```
-
-This script will:
-1. Check that `uv` is installed
-2. Install all Python dependencies
-3. Download the dataset metadata from HuggingFace (`lincyaw/rca`)
-4. Initialize `eval.db` with all 500 samples
-5. Verify the database is ready
-
-### Manual Setup
-
-If you prefer manual steps or the script does not work:
-
-```bash
-# 1. Install dependencies
-uv sync
-
-# 2. Download dataset metadata
-uv run python3 -c "
-from datasets import load_dataset
-import json
-
-ds = load_dataset('lincyaw/rca', split='train')
-with open('data/data.jsonl', 'w') as f:
-    for item in ds:
-        f.write(json.dumps(dict(item), ensure_ascii=False) + '\n')
-"
-
-# 3. Initialize eval.db
-uv run python3 scripts/init_eval_db.py --jsonl data/data.jsonl --db eval.db
-
-# 4. Download telemetry data (the actual parquet files)
-# Option A: From HuggingFace (if network allows)
-# Option B: Copy from existing machine: rsync -av /mnt/jfs/rcabench_dataset/ ./data/
-# Option C: Use the hf_upload/data/ directory if you have it
-```
-
-### After Setup
-
-1. Configure API keys in `.env`:
-
-```bash
-UTU_LLM_TYPE=chat.completions
-UTU_LLM_MODEL=<your-model>
-UTU_LLM_BASE_URL=<your-api-url>
-UTU_LLM_API_KEY=<your-api-key>
-```
-
-2. Update `config/eval/openrca2_lite.yaml`:
-
-```yaml
-db_url: "sqlite:///eval.db"
-source_path: "./data"  # or wherever the telemetry data is
-```
-
-3. Run evaluation:
-
-```bash
-uv run rca llm-eval run config/eval/openrca2_lite.yaml \
-  -a thinkdepthai \
-  --source-path ./data
-```
-
----
-
-## Alternative: OpenRCA-2.0-Lite v1 evaluation
-
-Evaluate against the published [`lincyaw/openrca2-lite-v1`](https://huggingface.co/datasets/lincyaw/openrca2-lite-v1) dataset (635 cases curated for end-to-end causal-chain verification, ~6.6 GB). Coexists with the `openrca2-lite` flow above.
-
-```bash
-# 1. Pull the dataset (~6.6 GB) — produces a folder with MANIFEST.json + per-case dirs
-hf download lincyaw/openrca2-lite-v1 --repo-type dataset --local-dir ./data/openrca2_lite_v1
-
-# 2. Point .env at it (or pass --lite-root)
-echo 'LITE_V1_ROOT=./data/openrca2_lite_v1' >> .env
-
-# 3. Seed eval rows from the snapshot (uses meta.source_data_dir; no source_path needed)
-uv run python scripts/seed_lite_v1_db.py
-
-# 4. Run
-uv run rca llm-eval run config/eval/openrca2_lite_v1.yaml -a thinkdepthai
-```
-
-`config/eval/openrca2_lite_v1.yaml` reads `LLM_EVAL_DB_URL` from env. The seeder writes per-row `meta.source_data_dir` so the eval doesn't need a global `source_path`. Tag scheme: rows carry `openrca2-lite-v1` plus `-old` (403 carried-over cases) or `-new` (232 added in v1 curation); `config/eval/openrca2_lite_v1_new.yaml` filters to the `-new` subset for shared-DB scenarios. `scripts/check_preprocess.py <config>` runs the preprocess step only (no LLM cost) for format checks.
-
----
-
-## Alternative: dataset_v1_500 (v2 evaluator) evaluation
-
-Evaluate against the published [`lincyaw/openrca2-v1-500`](https://huggingface.co/datasets/lincyaw/openrca2-v1-500) dataset (500 cases sampled across `ts`, `hs`, `otel-demo`; ~3.4 GB). Pairs with `rcabench-platform >= 0.4.24`'s v2 evaluator (type-aware fault matching, DuckDB SQL evidence verification, LLM-judge chain coherence).
-
-```bash
-# 1. Pull the dataset (~3.4 GB) — produces a folder with MANIFEST.json + per-case dirs
-hf download lincyaw/openrca2-v1-500 --repo-type dataset --local-dir ./data/openrca2_v1_500
-
-# 2. Point .env at it (or pass --snapshot-root)
-echo 'DATASET_V1_500_ROOT=./data/openrca2_v1_500' >> .env
-
-# 3. Seed eval rows (writes per-row meta.source_data_dir; no global source_path needed)
-uv run python scripts/seed_dataset_v1_db.py
-
-# 4. Smoke (1 sample)
-uv run rca llm-eval run config/eval/dataset_v1_500_smoke.yaml -a thinkdepthai
-```
-
-The seeder accepts either `--snapshot-root` (HF layout) or `--dataset-root + --pool-root` (local pool layout used during dataset construction). Tag is `dataset_v1_500`; both configs read `LLM_EVAL_DB_URL` from env.
+The seeder is idempotent — re-running with `--merge-tags` only adds the v3 tag to existing rows; without it, existing rows are overwritten with the v3 metadata.

@@ -1,4 +1,4 @@
-exp_id: "thinkdepthai_dataset_v1_500_smoke"
+exp_id: "thinkdepthai_openrca2_lite_v3_smoke"
 agent_type: "langgraph_rca"
 model_name: ""
 
@@ -8,19 +8,18 @@ data:
   question_field: question
   gt_field: answer
   tags:
-    - dataset_v1_500
+    - openrca2-lite-v3
 
-# db_url read from $LLM_EVAL_DB_URL.
+db_url: "sqlite:///eval.db"
 
 concurrency: 1
 judge_concurrency: 1
 max_samples: 1
 
-# source_path is intentionally omitted: each DatasetSample row's
-# meta.source_data_dir already points at the absolute case directory
-# (set by scripts/seed_dataset_v1_db.py). For shared-DB scenarios where
-# rows came from a different layout, set source_path / source_path_pattern
-# here to override.
+# v3 cases live at <root>/cases/<name>/ either as real dirs (HF snapshot)
+# or as symlinks (local pool layout). The v3 seeder writes per-row
+# meta.source_data_dir, so no global source_path is needed here — the
+# RCABenchProcesser reads each case dir directly off that meta field.
 
 judge_model:
   model_provider:
