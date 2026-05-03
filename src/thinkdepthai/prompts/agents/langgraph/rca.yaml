@@ -64,8 +64,8 @@ RCA_ANALYSIS_UP: |
     3. Diff abnormal vs normal: error rates, latency, status codes, log levels.
     4. Trace the call chain (parent_span_id → span_id) to find the earliest
        service whose own work — not its dependency's — went wrong.
-    5. For network faults, identify the exact src→dst pair. For code-level
-       faults, narrow to the specific class.method when possible.
+    5. For network faults, identify the upstream/downstream service pair so
+       the propagation chain you emit later is concrete.
     6. Decide every root cause + every propagation edge. More than one root
        cause is possible — note each separately when evidence supports it.
 
