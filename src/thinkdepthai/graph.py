@@ -1,12 +1,14 @@
 """RCA Agent LangGraph workflow — 3-node graph: llm_call → tool_node → compress."""
 
 import base64
+import json
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
 from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
 from langgraph.graph import END, START, StateGraph
 
+from .output_validator import validate_rca_output
 from .prompts import PromptManager
 from .state import RCAOutputState, RCAState
 from .tools import think_tool
@@ -14,6 +16,22 @@ from .utils.logger import get_logger
 from .utils.rate_limiter import retry_with_backoff
 
 logger = get_logger(__name__)
+
+# How many extra synthesis attempts to spend repairing a malformed
+# output. The first attempt does not count — the budget is purely for
+# corrective re-tries with explicit feedback on what was wrong.
+_MAX_SYNTHESIS_REPAIR_ATTEMPTS = 3
+
+
+def _build_repair_prompt(errors: list[str]) -> str:
+    bullets = "\n".join(f"  - {e}" for e in errors)
+    return (
+        "Your previous synthesis output failed validation:\n"
+        f"{bullets}\n\n"
+        "Re-emit the synthesis as a SINGLE strict JSON object matching the "
+        "schema described earlier. Output JSON only — no markdown fences, "
+        "no prose, no explanation. Begin with `{` and end with `}`."
+    )
 
 _SKIP_THOUGHT_SIGNATURE_VALIDATOR_B64 = base64.b64encode(b"skip_thought_signature_validator").decode("utf-8")
 
@@ -115,7 +133,16 @@ async def tool_node(state: RCAState, cfg: _GraphConfig):
 
 
 async def compress_rca_findings(state: RCAState, model, cfg: _GraphConfig):
-    """Compress RCA findings into a structured report."""
+    """Compress RCA findings into a structured report.
+
+    The first call asks the model to synthesize the investigation
+    messages into the v2 RCA JSON envelope. If validation rejects the
+    output (truncated JSON, missing required fields, etc.), this node
+    feeds the specific errors back as a follow-up HumanMessage and asks
+    the model to re-emit, up to ``_MAX_SYNTHESIS_REPAIR_ATTEMPTS`` times.
+    Each repair turn carries the failed AIMessage so the model can see
+    its own broken output alongside the diagnosis.
+    """
     from datetime import datetime
 
     prompts = PromptManager.get_prompts(cfg.prompt_path)
@@ -125,23 +152,49 @@ async def compress_rca_findings(state: RCAState, model, cfg: _GraphConfig):
         date=datetime.now().strftime("%a %b %-d, %Y"),
     )
 
-    messages = (
+    messages: list = (
         [SystemMessage(content=system_message)]
         + list(state.get("messages", []))
         + [HumanMessage(content=human_message)]
     )
 
-    async def _invoke_with_retry():
-        return await model.ainvoke(messages)
+    async def _invoke(msgs=messages):
+        return await model.ainvoke(msgs)
 
-    response = await cfg.invoke_with_retry(_invoke_with_retry)
+    response = await cfg.invoke_with_retry(_invoke)
+    content = str(response.content)
+    outcome = validate_rca_output(content)
+
+    repair_attempt = 0
+    while outcome.retry_warranted and repair_attempt < _MAX_SYNTHESIS_REPAIR_ATTEMPTS:
+        repair_attempt += 1
+        logger.warning(
+            f"RCA synthesis output failed validation "
+            f"(repair attempt {repair_attempt}/{_MAX_SYNTHESIS_REPAIR_ATTEMPTS}); "
+            f"errors={outcome.errors}"
+        )
+        messages = messages + [response, HumanMessage(content=_build_repair_prompt(outcome.errors))]
+
+        async def _repair_invoke(msgs=messages):
+            return await model.ainvoke(msgs)
+
+        response = await cfg.invoke_with_retry(_repair_invoke)
+        content = str(response.content)
+        outcome = validate_rca_output(content)
+
+    if outcome.retry_warranted:
+        logger.error(
+            f"RCA synthesis output still invalid after "
+            f"{_MAX_SYNTHESIS_REPAIR_ATTEMPTS} repair attempts; "
+            f"persisting last envelope. errors={outcome.errors}"
+        )
 
     from langchain_core.messages import filter_messages
 
     raw_notes = [str(m.content) for m in filter_messages(state["messages"], include_types=["tool", "ai"])]
 
     return {
-        "rca_findings": str(response.content),
+        "rca_findings": json.dumps(outcome.envelope, ensure_ascii=False),
         "raw_notes": ["\n".join(raw_notes)],
     }
 

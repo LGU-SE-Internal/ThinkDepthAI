@@ -307,138 +307,19 @@ class LanggraphRCAAgent:
             })
 
     @staticmethod
-    def _extract_json_from_text(text: str) -> str | None:
-        """Extract JSON object from text that may contain markdown."""
-        import re
-
-        if not text or not text.strip():
-            return None
-
-        text = text.strip()
-
-        # Try markdown code blocks
-        for pattern in [r"```json\s*([\s\S]*?)\s*```", r"```\s*([\s\S]*?)\s*```"]:
-            match = re.search(pattern, text, re.IGNORECASE)
-            if match:
-                extracted = match.group(1).strip()
-                if extracted.startswith("{"):
-                    return extracted
-
-        # Find balanced braces
-        first_brace = text.find("{")
-        if first_brace == -1:
-            return None
-
-        depth = 0
-        in_string = False
-        escape_next = False
-        end_pos = -1
-
-        for i in range(first_brace, len(text)):
-            char = text[i]
-            if escape_next:
-                escape_next = False
-                continue
-            if char == "\\":
-                escape_next = True
-                continue
-            if char == '"' and not escape_next:
-                in_string = not in_string
-                continue
-            if in_string:
-                continue
-            if char == "{":
-                depth += 1
-            elif char == "}":
-                depth -= 1
-                if depth == 0:
-                    end_pos = i
-                    break
-
-        if end_pos != -1:
-            return text[first_brace : end_pos + 1]
-        return None
-
-    @staticmethod
     def _validate_causal_graph_json(causal_graph_output: str) -> str:
-        """Validate the v2 RCA output schema produced by the synthesis node.
+        """Final post-graph safety pass over the synthesis output.
 
-        Required shape:
-            {"root_causes": [...], "propagation": [...]}
-        with each `root_causes[i]` carrying `service`, `fault_kind`, and at
-        least one `evidence` item. Failures are returned as a JSON envelope
-        carrying `parse_error`/`parse_warning` plus a truncated `raw_output`
-        so the downstream eval can record what the model emitted.
+        The graph's synthesis node already validates and (up to a budget)
+        retries with corrective feedback before emitting ``rca_findings``,
+        so by this point the envelope is normally already clean. This
+        method exists to keep the contract that downstream callers always
+        receive a schema-shaped JSON string, even if the synthesis node
+        was bypassed (e.g. tests calling ``run`` with a stub graph).
         """
-        empty_envelope = {"root_causes": [], "propagation": []}
-        if not causal_graph_output or not causal_graph_output.strip():
-            logger.warning("RCA output is empty")
-            return json.dumps({**empty_envelope, "parse_error": "Empty output"}, ensure_ascii=False)
+        from .output_validator import validate_rca_output
 
-        extracted_json = LanggraphRCAAgent._extract_json_from_text(causal_graph_output)
-        if not extracted_json:
-            logger.warning("Could not extract JSON from RCA output")
-            return json.dumps(
-                {
-                    **empty_envelope,
-                    "parse_error": "Could not find JSON in output",
-                    "raw_output": causal_graph_output[:500],
-                },
-                ensure_ascii=False,
-            )
-
-        try:
-            parsed = json.loads(extracted_json)
-        except json.JSONDecodeError as e:
-            logger.error(f"Failed to parse RCA JSON: {e}")
-            return json.dumps(
-                {
-                    **empty_envelope,
-                    "parse_error": f"JSON decode error: {e}",
-                    "raw_output": causal_graph_output[:500],
-                },
-                ensure_ascii=False,
-            )
-
-        if not isinstance(parsed, dict):
-            return json.dumps(
-                {
-                    **empty_envelope,
-                    "parse_error": "Output is not a JSON object",
-                    "raw_output": causal_graph_output[:500],
-                },
-                ensure_ascii=False,
-            )
-
-        warnings: list[str] = []
-        root_causes = parsed.get("root_causes")
-        if not isinstance(root_causes, list) or not root_causes:
-            warnings.append("root_causes missing or empty")
-            root_causes = []
-
-        cleaned_root_causes: list[dict] = []
-        for i, rc in enumerate(root_causes):
-            if not isinstance(rc, dict):
-                warnings.append(f"root_causes[{i}] is not an object; dropping")
-                continue
-            if not rc.get("service"):
-                warnings.append(f"root_causes[{i}] missing `service`; dropping")
-                continue
-            if not rc.get("fault_kind"):
-                warnings.append(f"root_causes[{i}] missing `fault_kind`; dropping")
-                continue
-            evidence = rc.get("evidence")
-            if not isinstance(evidence, list) or not evidence:
-                warnings.append(f"root_causes[{i}] has no evidence; dropping")
-                continue
-            cleaned_root_causes.append(rc)
-
-        propagation = parsed.get("propagation")
-        if not isinstance(propagation, list):
-            propagation = []
-
-        result: dict = {"root_causes": cleaned_root_causes, "propagation": propagation}
-        if warnings:
-            result["parse_warning"] = "; ".join(warnings)
-            logger.warning(f"RCA v2 schema warnings: {result['parse_warning']}")
-        return json.dumps(result, ensure_ascii=False)
+        outcome = validate_rca_output(causal_graph_output)
+        if outcome.retry_warranted:
+            logger.warning(f"RCA synthesis output failed validation: {outcome.errors}")
+        return json.dumps(outcome.envelope, ensure_ascii=False)

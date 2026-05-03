@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 
@@ -10,6 +11,17 @@ import duckdb
 from .base import AsyncBaseToolkit, register_tool
 
 TOKEN_LIMIT = 5000
+
+# Only telemetry parquets — log/trace/metric-bearing files — are exposed to
+# the agent. Anything else in a case dir (notably conclusion.parquet, which
+# encodes the ground-truth root cause) must stay invisible to prevent
+# label leakage during evaluation.
+_ALLOWED_PARQUET_RE = re.compile(r"(log|trace|metric)", re.IGNORECASE)
+
+
+def _is_allowed_parquet(path: str | Path) -> bool:
+    return _ALLOWED_PARQUET_RE.search(Path(path).stem) is not None
+
 
 os.environ["TOKENIZERS_PARALLELISM"] = "false"
 
@@ -87,6 +99,15 @@ class QueryParquetFilesToolkit(AsyncBaseToolkit):
             parquet_files = [parquet_files]
 
         for fp in parquet_files:
+            if not _is_allowed_parquet(fp):
+                return json.dumps(
+                    {
+                        "error": (
+                            f"Access denied: {Path(fp).name} is not a telemetry parquet. "
+                            "Only files whose name contains 'log', 'trace', or 'metric' are queryable."
+                        )
+                    }
+                )
             if not Path(fp).exists():
                 return json.dumps({"error": f"Parquet file not found: {fp}"})
 
@@ -131,6 +152,15 @@ class QueryParquetFilesToolkit(AsyncBaseToolkit):
         Returns:
             JSON string containing file metadata, row count, and column information
         """
+        if not _is_allowed_parquet(parquet_file):
+            return json.dumps(
+                {
+                    "error": (
+                        f"Access denied: {Path(parquet_file).name} is not a telemetry parquet. "
+                        "Only files whose name contains 'log', 'trace', or 'metric' are inspectable."
+                    )
+                }
+            )
         if not Path(parquet_file).exists():
             return json.dumps({"error": f"Parquet file not found: {parquet_file}"})
 
@@ -167,6 +197,8 @@ class QueryParquetFilesToolkit(AsyncBaseToolkit):
 
         files_info = []
         for file_path in dir_path.glob("*.parquet"):
+            if not _is_allowed_parquet(file_path):
+                continue
             try:
                 conn = duckdb.connect(":memory:")
                 row_count_result = conn.execute(f"SELECT COUNT(*) FROM read_parquet('{file_path}')").fetchone()

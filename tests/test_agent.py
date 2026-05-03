@@ -75,51 +75,80 @@ def test_agent_instantiation():
     assert not agent._initialized
 
 
-def test_validate_causal_graph_json():
-    """Test CausalGraph JSON validation."""
+def test_validate_causal_graph_json_v2():
+    """v2 envelope: root_causes + propagation, each carrying evidence."""
     from thinkdepthai.agent import LanggraphRCAAgent
 
-    # Valid JSON
     valid = json.dumps({
-        "nodes": [{"component": "svc-a", "state": ["HIGH_ERROR_RATE"]}],
-        "edges": [{"source": "svc-a", "target": "svc-b"}],
-        "root_causes": [{"component": "svc-a", "state": ["HIGH_ERROR_RATE"]}],
-        "component_to_service": {},
+        "root_causes": [
+            {
+                "service": "svc-a",
+                "fault_kind": "dns",
+                "evidence": [
+                    {"kind": "log", "sql": "SELECT 1", "claim": "DNS failures observed"}
+                ],
+            }
+        ],
+        "propagation": [],
     })
     result = LanggraphRCAAgent._validate_causal_graph_json(valid)
     parsed = json.loads(result)
-    assert len(parsed["nodes"]) == 1
+    assert len(parsed["root_causes"]) == 1
     assert "parse_error" not in parsed
 
-    # Empty input
-    result = LanggraphRCAAgent._validate_causal_graph_json("")
-    parsed = json.loads(result)
+    # Empty input → parse_error envelope, never raises.
+    parsed = json.loads(LanggraphRCAAgent._validate_causal_graph_json(""))
     assert "parse_error" in parsed
+    assert parsed["root_causes"] == []
 
-    # JSON in markdown code block
-    markdown = '```json\n{"nodes": [], "edges": [], "root_causes": []}\n```'
-    result = LanggraphRCAAgent._validate_causal_graph_json(markdown)
-    parsed = json.loads(result)
-    assert parsed["nodes"] == []
-    assert parsed["edges"] == []
+    # Markdown-fenced JSON is unwrapped.
+    fenced = (
+        '```json\n'
+        '{"root_causes":[{"service":"x","fault_kind":"dns","evidence":[{"kind":"log","sql":"SELECT 1","claim":"hi"}]}],'
+        '"propagation":[]}\n'
+        '```'
+    )
+    parsed = json.loads(LanggraphRCAAgent._validate_causal_graph_json(fenced))
+    assert parsed["root_causes"][0]["service"] == "x"
 
 
-def test_extract_json_from_text():
-    """Test JSON extraction from text."""
-    from thinkdepthai.agent import LanggraphRCAAgent
+def test_validate_truncated_synthesis_output():
+    """Regression: truncated JSON (depth>0 at EOF) should yield a
+    specific 'never closed' diagnosis, not a vague 'no JSON' message."""
+    from thinkdepthai.output_validator import validate_rca_output
 
-    # Plain JSON
-    assert LanggraphRCAAgent._extract_json_from_text('{"key": "value"}') == '{"key": "value"}'
+    # Open the outer object + propagation array but never close them.
+    truncated = (
+        '{"root_causes":[{"service":"a","fault_kind":"dns","evidence":'
+        '[{"kind":"log","sql":"SELECT 1","claim":"x"}]}],"propagation":['
+    )
+    outcome = validate_rca_output(truncated)
+    assert outcome.retry_warranted
+    assert len(outcome.errors) == 1
+    assert "truncated" in outcome.errors[0].lower()
+    assert "brace-depth" in outcome.errors[0]
 
-    # JSON in markdown
-    md = 'Some text\n```json\n{"a": 1}\n```\nMore text'
-    assert LanggraphRCAAgent._extract_json_from_text(md) == '{"a": 1}'
 
-    # No JSON
-    assert LanggraphRCAAgent._extract_json_from_text("no json here") is None
+def test_validate_decode_error_actionable():
+    """A JSON decode error should surface a single actionable message."""
+    from thinkdepthai.output_validator import validate_rca_output
 
-    # Empty
-    assert LanggraphRCAAgent._extract_json_from_text("") is None
+    outcome = validate_rca_output('{"root_causes":[{"service":"x",}]}')  # trailing comma
+    assert outcome.retry_warranted
+    assert any("decode error" in e.lower() for e in outcome.errors)
+
+
+def test_validate_dropped_root_causes_warrants_retry():
+    """When every root_cause is missing required fields, we retry."""
+    from thinkdepthai.output_validator import validate_rca_output
+
+    bad = json.dumps({
+        "root_causes": [{"fault_kind": "dns", "evidence": [{"kind": "log", "sql": "SELECT 1", "claim": "hi"}]}],
+        "propagation": [],
+    })
+    outcome = validate_rca_output(bad)
+    assert outcome.retry_warranted
+    assert any("service" in e for e in outcome.errors)
 
 
 def test_converter_import():
