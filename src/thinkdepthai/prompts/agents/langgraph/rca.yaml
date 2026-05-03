@@ -1,7 +1,10 @@
 # Langgraph RCA Agent Prompts (v2 schema — type-aware fault attribution +
-# DuckDB SQL evidence). Schema lives only in COMPRESS_FINDINGS_*; the
-# investigation phase is told the fault vocabulary and the playbook but NOT
-# the output JSON shape.
+# DuckDB SQL evidence). The fault_kind enum + JSON output schema +
+# field/SQL/hard rules are spliced in at format-time from
+# rcabench_platform.v3.sdk.evaluation.v2.get_agent_contract_prompt(),
+# so the contract version follows the rcabench-platform SDK version
+# automatically. The investigation phase is told the goal + the
+# playbook, not the output shape.
 
 RCA_ANALYSIS_SP: |
   You are a Root Cause Analysis (RCA) expert investigating a microservices
@@ -25,8 +28,13 @@ RCA_ANALYSIS_SP: |
   Common columns:
     metrics: time, metric, value, service_name, attr.k8s.pod.name,
              attr.k8s.namespace.name
+    metrics_sum: same shape; carries jvm.cpu.*, jvm.memory.*,
+             jvm.thread.count, jvm.gc.*, container.cpu.*, container.memory.*
+    metrics_histogram: time, metric, service_name, count, sum, min, max,
+             attr.jvm.gc.action, attr.jvm.gc.name
     traces:  time, trace_id, span_id, parent_span_id, span_name, service_name,
-             duration, attr.status_code, attr.http.request.method
+             duration, attr.status_code, attr.http.request.method,
+             attr.http.response.status_code
     logs:    time, trace_id, span_id, level, service_name, message
   </Available data>
 
@@ -44,23 +52,6 @@ RCA_ANALYSIS_SP: |
       on at most 2 files, then 4–5 query_parquet_files calls is plenty.
   </Hard limits>
 
-  <Fault vocabulary (use these names when reasoning)>
-    pod_failure       — pod / container kill / pod failure
-    cpu_stress        — CPU pressure
-    mem_stress        — memory pressure
-    network_delay     — added latency on a link  (has src→dst direction)
-    network_loss      — packet loss              (has src→dst direction)
-    network_partition — link partitioned         (has src→dst direction)
-    network_corrupt   — packet corruption        (has src→dst direction)
-    network_duplicate — packet duplication       (has src→dst direction)
-    jvm_exception     — JVM throws an exception in a method
-    jvm_mutator       — JVM mutates return value or runtime behavior
-    http_abort        — HTTP request or response aborted
-    http_replace      — HTTP method, status code, or body replaced
-    dns               — DNS resolution failure
-    time_skew         — host clock skew
-  </Fault vocabulary>
-
 RCA_ANALYSIS_UP: |
   Conduct a Root Cause Analysis for the following incident.
 
@@ -73,10 +64,10 @@ RCA_ANALYSIS_UP: |
     3. Diff abnormal vs normal: error rates, latency, status codes, log levels.
     4. Trace the call chain (parent_span_id → span_id) to find the earliest
        service whose own work — not its dependency's — went wrong.
-    5. For network/jvm/http faults, narrow down to the exact src→dst pair
-       or class.method.
+    5. For network faults, identify the exact src→dst pair. For code-level
+       faults, narrow to the specific class.method when possible.
     6. Decide every root cause + every propagation edge. More than one root
-       cause is possible — emit each separately when the evidence supports it.
+       cause is possible — note each separately when evidence supports it.
 
   After each query, call `think_tool` to record what you learned and what's
   still unknown.
@@ -85,62 +76,22 @@ RCA_ANALYSIS_UP: |
   comes from the synthesis step.
 
 COMPRESS_FINDINGS_SP: |
-  You are an RCA synthesizer. Convert the investigation messages above into
-  a single STRICT JSON object matching the v2 RCA schema. Output JSON only —
-  no markdown, no commentary. Today's date is {date}.
+  You are an RCA synthesizer. Today's date is {date}.
+
+  Your job: convert the investigation messages above into a single STRICT
+  JSON object matching the v2 RCA schema. Output JSON only — no markdown,
+  no commentary, no prose.
+
+  {agent_contract}
+
+  ## Filtering investigation messages
+    • Include: query results showing anomalies / errors / latency.
+    • Exclude: `think_tool` outputs (the agent's own reasoning notes).
 
 COMPRESS_FINDINGS_UP: |
   ## Incident
   {incident_description}
 
-  ## Task
-  Synthesize the tool-call evidence above into a SINGLE strict JSON object
-  matching this schema:
-
-  ```json
-  {{
-    "root_causes": [
-      {{
-        "service": "<canonical service name>",
-        "fault_kind": "<one of: pod_failure, cpu_stress, mem_stress, network_delay, network_loss, network_partition, network_corrupt, network_duplicate, jvm_exception, jvm_mutator, http_abort, http_replace, dns, time_skew>",
-        "direction": {{"src": "<service>", "dst": "<service>"}},
-        "method": "<class.method or null>",
-        "confidence": 0.0,
-        "evidence": [
-          {{"kind": "metric|trace|log",
-            "sql": "<DuckDB SQL re-executable on this case dir>",
-            "claim": "<≤20-word claim the rows support>"}}
-        ]
-      }}
-    ],
-    "propagation": [
-      {{"from": "<service>", "to": "<service>",
-        "evidence": [{{"kind": "trace", "sql": "...", "claim": "..."}}]}}
-    ]
-  }}
-  ```
-
-  ## Filtering tool messages
-    • Include: query results showing anomalies / errors / latency.
-    • Exclude: `think_tool` outputs (your own reasoning notes).
-
-  ## Hard rules
-    • One entry per distinct root cause. Do NOT collapse multiple distinct
-      faults into a single root_cause.
-    • EVERY root_cause carries ≥1 `evidence` with a re-runnable DuckDB SQL —
-      the SQL itself, not a description of one.
-    • EVERY propagation edge carries ≥1 evidence. Do NOT emit edges you
-      cannot back with a concrete trace/metric query.
-    • SQL: SELECT only; reference parquets via `read_parquet('<file>.parquet')`
-      with bare filenames; one statement; no DDL/DML/ATTACH/INSTALL/PRAGMA/SET.
-    • `direction` MUST be present for every `network_*` fault. `src` is the
-      service the netem rule sits on; `dst` is the remote peer it shapes
-      traffic toward.
-    • `method` MUST be `null` (or omitted) when fault_kind is not
-      `jvm_*` / `http_*`.
-    • Service names should match the strings actually present in the data —
-      do not invent names.
-
-  ## Output
-  ONE JSON object. No prefix, no suffix, no markdown fences, no explanation.
-  Begin output now.
+  Synthesize the investigation messages above into ONE JSON object as
+  specified in the system prompt. No prefix, no suffix, no markdown fences,
+  no explanation. Begin output now.

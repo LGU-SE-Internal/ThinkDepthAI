@@ -145,8 +145,13 @@ async def compress_rca_findings(state: RCAState, model, cfg: _GraphConfig):
     """
     from datetime import datetime
 
+    from rcabench_platform.v3.sdk.evaluation.v2 import get_agent_contract_prompt
+
     prompts = PromptManager.get_prompts(cfg.prompt_path)
-    system_message = prompts["COMPRESS_FINDINGS_SP"].format(date=datetime.now().strftime("%a %b %-d, %Y"))
+    system_message = prompts["COMPRESS_FINDINGS_SP"].format(
+        date=datetime.now().strftime("%a %b %-d, %Y"),
+        agent_contract=get_agent_contract_prompt(),
+    )
     human_message = prompts["COMPRESS_FINDINGS_UP"].format(
         incident_description=state.get("incident_description", ""),
         date=datetime.now().strftime("%a %b %-d, %Y"),
