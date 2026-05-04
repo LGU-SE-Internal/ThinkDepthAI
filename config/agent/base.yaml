@@ -9,5 +9,3 @@ toolkits:
   query_parquet_files:
     name: query_parquet_files
     mode: builtin
-
-max_turns: 1000

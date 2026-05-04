@@ -43,8 +43,8 @@ RCA_ANALYSIS_SP: |
 
   ## Hard limits
 
-  - Tool-call budget: 25 calls total. Stop when you have enough evidence OR you hit 25, whichever comes first.
-  - Use the budget efficiently: `list_tables_in_directory` once, `get_schema` on the files you actually plan to query, then spend the rest on `query_parquet_files`.
+  - Tool-call budget: aim for ~50 calls; extend if the evidence genuinely warrants it. Hard cap is 100 — the runtime will force a stop there.
+  - Spend the budget efficiently: `list_tables_in_directory` once, `get_schema` on the files you actually plan to query, then spend the rest on `query_parquet_files`.
 
   ## Investigation playbook
 

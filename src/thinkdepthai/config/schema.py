@@ -66,4 +66,3 @@ class AgentConfig(BaseModel):
     model: ModelConfig = Field(default_factory=ModelConfig)
     agent: AgentProfileConfig = Field(default_factory=AgentProfileConfig)
     toolkits: dict[str, ToolkitConfig] = Field(default_factory=dict)
-    max_turns: int = 1000

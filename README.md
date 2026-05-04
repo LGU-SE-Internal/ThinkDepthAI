@@ -77,7 +77,7 @@ class RCAState(TypedDict):
 >
 > **CRITICAL: Use `think_tool` after each search to reflect on results and plan next steps**
 >
-> **Tool Call Budget**: 10-15 typical, **stop after 20**
+> **Tool Call Budget**: aim for ~50, extend if needed, **hard cap 100**
 >
 > **Output MUST be CausalGraph JSON** with `nodes`, `edges`, `root_causes`, `component_to_service`
 

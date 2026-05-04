@@ -204,7 +204,7 @@ async def compress_rca_findings(state: RCAState, model, cfg: _GraphConfig):
     }
 
 
-_MAX_TOOL_ITERATIONS = 30
+_MAX_TOOL_ITERATIONS = 100
 
 
 def should_continue(state: RCAState) -> Literal["tool_node", "compress_rca_findings"]:
