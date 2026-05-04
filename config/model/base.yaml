@@ -8,7 +8,7 @@ model_settings:
 
 rate_limit:
   rpm: 500
-  tpm: 800000
+  tpm: 1320000
   max_retries: 20
   retry_min_wait: 1.0
   retry_max_wait: 120.0

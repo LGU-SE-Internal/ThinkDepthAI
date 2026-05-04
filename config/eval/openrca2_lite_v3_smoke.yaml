@@ -1,4 +1,4 @@
-exp_id: "thinkdepthai_openrca2_lite_v3_smoke"
+exp_id: "thinkdepthai_dataset_v3-smoke"
 agent_type: "langgraph_rca"
 model_name: ""
 
@@ -12,9 +12,9 @@ data:
 
 db_url: "sqlite:///eval.db"
 
-concurrency: 1
-judge_concurrency: 1
-max_samples: 1
+concurrency: 15
+judge_concurrency: 2
+max_samples: null
 
 # v3 cases live at <root>/cases/<name>/ either as real dirs (HF snapshot)
 # or as symlinks (local pool layout). The v3 seeder writes per-row
