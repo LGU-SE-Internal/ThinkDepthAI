@@ -20,7 +20,7 @@ dependencies = [
     "python-dotenv>=1.2.2",
     "pytz>=2026.1.post1",
     "pyyaml>=6.0.2",
-    "rcabench-platform[llm-eval]>=0.4.37",
+    "rcabench-platform[llm-eval]>=0.4.39",
     "tenacity>=8.2.0",
 ]
 
