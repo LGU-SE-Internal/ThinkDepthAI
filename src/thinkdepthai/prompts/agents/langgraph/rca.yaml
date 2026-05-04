@@ -55,7 +55,6 @@ RCA_ANALYSIS_SP: |
   5. Decide every root cause + every propagation edge. More than one root cause is possible — note each separately when evidence supports it.
 
 RCA_ANALYSIS_UP: |
-  ## Incident
   {incident_description}
 
 COMPRESS_FINDINGS_SP: |
