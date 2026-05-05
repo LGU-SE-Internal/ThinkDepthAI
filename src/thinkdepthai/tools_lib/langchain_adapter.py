@@ -55,10 +55,9 @@ def _method_to_langchain_tool(tool_name: str, method: Callable[..., Any], struct
         coroutine=_invoke,
         name=tool_name,
         description=description,
-        args_schema=None,
+        args_schema=schema,
         func=None,
         infer_schema=False,
-        args_override=schema,
     )
 
 
