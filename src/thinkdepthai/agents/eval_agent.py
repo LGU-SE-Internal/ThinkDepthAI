@@ -90,9 +90,15 @@ class ThinkDepthAgent(BaseAgent):
             ctx.emit({"type": "running", "run_id": run_id})
             ctx.emit({"type": "trajectory_update", "path": expected_traj_path})
 
+        on_usage = None
+        if ctx is not None:
+            def on_usage(usage_event: dict[str, Any]) -> None:
+                ctx.emit({"type": "token_usage", "run_id": run_id, **usage_event})
+
         agent = LanggraphRCAAgent(
             config=agent_config,
             trajectory_dir=traj_dir,
+            on_usage=on_usage,
         )
 
         async with agent:
@@ -104,12 +110,14 @@ class ThinkDepthAgent(BaseAgent):
             )
 
         traj_file = result.metadata.get("trajectory_file") or expected_traj_path
+        token_usage = result.metadata.get("token_usage")
         return AgentResult(
             response=result.final_output or "",
             trajectory=result.trajectory if isinstance(result.trajectory, Trajectory) else None,
             metadata={
                 "run_id": run_id,
                 "trajectory_file": traj_file,
+                "token_usage": token_usage,
             },
         )
 

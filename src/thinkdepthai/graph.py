@@ -2,6 +2,7 @@
 
 import base64
 import json
+from collections.abc import Callable
 from dataclasses import dataclass, field
 from typing import Any, Literal, cast
 
@@ -45,6 +46,7 @@ class _GraphConfig:
     retry_config: dict[str, Any] = field(
         default_factory=lambda: {"max_retries": 5, "min_wait": 1.0, "max_wait": 60.0, "jitter": 1.0}
     )
+    usage_callback: Callable[[str, int, dict[str, Any]], None] | None = None
 
     async def invoke_with_retry(self, coro_fn) -> Any:
         return await retry_with_backoff(
@@ -54,6 +56,17 @@ class _GraphConfig:
             max_wait=self.retry_config["max_wait"],
             jitter=self.retry_config["jitter"],
         )
+
+    def report_usage(self, node: str, attempt: int, response: Any) -> None:
+        if self.usage_callback is None:
+            return
+        usage = getattr(response, "usage_metadata", None)
+        if not usage:
+            return
+        try:
+            self.usage_callback(node, attempt, dict(usage))
+        except Exception as e:
+            logger.warning(f"usage_callback failed: {e}")
 
 
 def _fix_gemini_thought_signatures(messages: list) -> list:
@@ -99,6 +112,7 @@ async def llm_call(state: RCAState, model_with_tools, cfg: _GraphConfig):
             return await model_with_tools.ainvoke(messages)
 
     response = await cfg.invoke_with_retry(_invoke_with_retry)
+    cfg.report_usage("llm_call", 0, response)
     return {"messages": [response]}
 
 
@@ -167,6 +181,7 @@ async def compress_rca_findings(state: RCAState, model, cfg: _GraphConfig):
         return await model.ainvoke(msgs)
 
     response = await cfg.invoke_with_retry(_invoke)
+    cfg.report_usage("compress_rca_findings", 0, response)
     content = str(response.content)
     outcome = validate_rca_output(content)
 
@@ -184,6 +199,7 @@ async def compress_rca_findings(state: RCAState, model, cfg: _GraphConfig):
             return await model.ainvoke(msgs)
 
         response = await cfg.invoke_with_retry(_repair_invoke)
+        cfg.report_usage("compress_rca_findings", repair_attempt, response)
         content = str(response.content)
         outcome = validate_rca_output(content)
 
@@ -225,6 +241,7 @@ def build_rca_agent(
     tools=None,
     prompt_path: str | None = None,
     retry_config: dict | None = None,
+    usage_callback: Callable[[str, int, dict[str, Any]], None] | None = None,
 ):
     """Build the RCA agent workflow graph."""
     resolved_tools = tools if tools else [think_tool]
@@ -239,6 +256,7 @@ def build_rca_agent(
         }
         if retry_config
         else {"max_retries": 5, "min_wait": 1.0, "max_wait": 60.0, "jitter": 1.0},
+        usage_callback=usage_callback,
     )
 
     agent_builder = StateGraph(RCAState, output_schema=RCAOutputState)
